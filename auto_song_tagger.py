@@ -532,13 +532,17 @@ class AutoSongTaggerUI(QWidget):
             }
             QPushButton#applyButton {
                 background-color: #FFA500;
-                color: #000000; /* Black text for better contrast */
+                color: #000000;
             }
             QPushButton#applyButton:hover {
                 background-color: #E69500;
             }
             QPushButton#applyButton:pressed {
                 background-color: #CC8400;
+            }
+            QPushButton#applyButton:disabled {
+                background-color: #B3A180;
+                color: #606060;
             }
             QPushButton:pressed {
                 background-color: #004578;
