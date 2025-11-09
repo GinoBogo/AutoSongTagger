@@ -61,6 +61,7 @@ class TagWriterThread(QThread):
     """A QThread subclass to perform tag writing in a separate thread."""
 
     finished = Signal(bool, str)  # Signal(success, message)
+    progress_signal = Signal(str)  # Signal to emit progress messages
 
     def __init__(self, song_file, metadata, cover_data, parent=None):
         super().__init__(parent)
@@ -70,6 +71,10 @@ class TagWriterThread(QThread):
 
     def run(self):
         try:
+            self.progress_signal.emit("Starting tag update...")
+            if self.cover_data:
+                self.progress_signal.emit("Processing cover art...")
+            self.progress_signal.emit("Saving file...")
             write_tags(self.song_file, self.metadata, self.cover_data)
             self.finished.emit(True, "ID3 tags updated successfully!")
         except Exception as e:
@@ -518,6 +523,12 @@ class AutoSongTaggerUI(QWidget):
         main_layout.addWidget(self.current_tags_label)
         main_layout.addLayout(tags_and_cover_layout)
 
+        # Progress Bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.hide()  # Initially hidden
+        main_layout.addWidget(self.progress_bar)
+
         self.setLayout(main_layout)
 
     ############################################################################
@@ -949,6 +960,7 @@ class AutoSongTaggerUI(QWidget):
             self.song_file_path, chosen_metadata, self._new_cover_data
         )
         self.tag_writer_thread.finished.connect(self._on_tags_written)
+        self.tag_writer_thread.progress_signal.connect(self._on_progress_update)
         self.tag_writer_thread.start()
 
     def _on_tags_written(self, success, message):
@@ -963,6 +975,15 @@ class AutoSongTaggerUI(QWidget):
 
         # Re-enable apply button
         self.apply_button.setEnabled(True)
+        self.progress_bar.hide()
+
+    ############################################################################
+
+    def _on_progress_update(self, message):
+        """Slot to update the progress bar with messages."""
+        self.progress_bar.show()
+        self.progress_bar.setFormat(message)
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress bar
 
     ############################################################################
 
