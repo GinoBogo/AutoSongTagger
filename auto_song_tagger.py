@@ -21,7 +21,14 @@ import configparser
 
 import musicbrainzngs
 
-from PySide6.QtCore import Qt
+from mutagen._util import MutagenError
+from mutagen.flac import Picture
+from mutagen.id3 import ID3
+from mutagen.id3._frames import TALB, TDRC, TPE1, TIT2, TCON, APIC  # noqa: F401
+from mutagen.mp3 import MP3
+from mutagen.oggopus import OggOpus
+
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -39,13 +46,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mutagen._util import MutagenError
-from mutagen.flac import Picture
-from mutagen.id3 import ID3
-from mutagen.id3._frames import TALB, TDRC, TPE1, TIT2, TCON  # noqa: F401
-from mutagen.mp3 import MP3
-from mutagen.oggopus import OggOpus
-
 # Define constants
 RIGHT_VCENTER_ALIGNMENT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 NO_FILE_SELECTED_TEXT = "No file selected."
@@ -53,6 +53,20 @@ CONFIG_FILE_NAME = "auto_song_tagger.cfg"
 
 # Setup MusicBrainz client
 musicbrainzngs.set_useragent("AutoSongTagger", "0.1", "your-email@example.com")
+
+################################################################################
+
+
+class ClickableLabel(QLabel):
+    """A QLabel subclass that emits a clicked signal when pressed."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event):
+        """Handles mouse press events and emits the clicked signal."""
+        self.clicked.emit()
+        super().mousePressEvent(event)
+
 
 ################################################################################
 
@@ -166,12 +180,59 @@ def _write_ogg_opus_tags(audio: OggOpus, metadata: dict[str, str]):
 ################################################################################
 
 
-def write_tags(song_file: str, metadata: dict[str, str]):
-    """Writes tags to an audio file.
+def _write_mp3_cover(audio: MP3, cover_data: bytes):
+    """Helper to write MP3 cover art."""
+    if audio.tags is None:
+        audio.tags = ID3()
+
+    # Remove existing APIC frames
+    audio.tags.delall("APIC")
+
+    # Add new cover art
+    audio.tags.add(
+        APIC(
+            encoding=3,  # UTF-8
+            mime="image/jpeg",  # Assuming JPEG, but could be dynamic
+            type=3,  # Front cover
+            desc="Cover",
+            data=cover_data,
+        )
+    )
+
+
+################################################################################
+
+
+def _write_ogg_opus_cover(audio: OggOpus, cover_data: bytes):
+    """Helper to write OggOpus cover art."""
+    if audio.tags is None:
+        audio.add_tags()
+
+    # Create a Mutagen Picture object
+    picture = Picture()
+    picture.data = cover_data
+    picture.type = 3  # Front cover
+    picture.mime = "image/jpeg"  # Assuming JPEG, but could be dynamic
+
+    # Encode the picture to base64 and add to tags
+    audio.tags["metadata_block_picture"] = [
+        base64.b64encode(picture.write()).decode("ascii")
+    ]
+
+
+################################################################################
+
+
+def write_tags(
+    song_file: str, metadata: dict[str, str], cover_data: bytes | None = None
+):
+    """Writes tags and optionally cover art to an audio file.
 
     Args:
         song_file (str): The absolute path to the audio file.
         metadata (dict): A dictionary containing the metadata to write.
+        cover_data (bytes, optional): The byte data of the cover image.
+                                      Defaults to None.
     """
     try:
         audio = get_audio_file(song_file)
@@ -190,6 +251,14 @@ def write_tags(song_file: str, metadata: dict[str, str]):
     else:
         print(f"Unsupported audio type for writing tags: {type(audio)}")
         return
+
+    if cover_data:
+        if isinstance(audio, MP3):
+            _write_mp3_cover(audio, cover_data)
+        elif isinstance(audio, OggOpus):
+            _write_ogg_opus_cover(audio, cover_data)
+        else:
+            print(f"Unsupported audio type for writing cover art: {type(audio)}")
 
     audio.save()
 
@@ -274,6 +343,7 @@ class AutoSongTaggerUI(QWidget):
         self.init_ui()
         self.apply_column_widths_from_settings()  # Apply column widths after UI is initialized
         self._apply_styles()
+        self._new_cover_data = None
 
     def init_ui(self):
         """Initializes the user interface components and layout."""
@@ -408,12 +478,13 @@ class AutoSongTaggerUI(QWidget):
         tags_and_cover_layout.addLayout(current_tags_input_layout)
 
         # Disc Cover Placeholder
-        self.disc_cover_label = QLabel("Disc Cover")
+        self.disc_cover_label = ClickableLabel("Disc Cover")
         self.disc_cover_label.setFixedSize(192, 192)  # Square box
         self.disc_cover_label.setStyleSheet(
             "background-color: #e0e0e0; border: 1px solid #ccc;"
         )
         self.disc_cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.disc_cover_label.clicked.connect(self._on_disc_cover_clicked)
         tags_and_cover_layout.addWidget(self.disc_cover_label)
 
         main_layout.addWidget(self.current_tags_label)
@@ -685,7 +756,7 @@ class AutoSongTaggerUI(QWidget):
             self.disc_cover_label.setText("Error loading file.")
             return
 
-        cover_data = None
+        cover_data: bytes | None = None
         if isinstance(audio, MP3):
             cover_data = self._extract_mp3_cover(audio)
         elif isinstance(audio, OggOpus):
@@ -830,12 +901,13 @@ class AutoSongTaggerUI(QWidget):
         }
 
         if chosen_metadata:
-            write_tags(self.song_file_path, chosen_metadata)
+            write_tags(self.song_file_path, chosen_metadata, self._new_cover_data)
             QMessageBox.information(
                 self, "Tags Applied", "ID3 tags updated successfully!"
             )
             self.display_current_tags()
             self.display_current_cover()
+            self._new_cover_data = None  # Clear the new cover data after applying
         else:
             QMessageBox.warning(self, "Error", "Failed to apply tags.")
 
@@ -876,6 +948,37 @@ class AutoSongTaggerUI(QWidget):
             self.apply_button.setEnabled(True)
         else:
             self.apply_button.setEnabled(False)
+
+    ############################################################################
+
+    def _on_disc_cover_clicked(self):
+        """Handles the click event on the disc cover placeholder, allowing the
+        user to select a new cover image.
+        """
+        file_dialog = QFileDialog(self)
+        file_dialog.setNameFilter("Image files (*.png *.jpg *.jpeg *.bmp *.gif *.webp)")
+        if file_dialog.exec():
+            selected_files = file_dialog.selectedFiles()
+            if selected_files:
+                image_path = selected_files[0]
+                try:
+                    with open(image_path, "rb") as f:
+                        self._new_cover_data = f.read()
+
+                    pixmap = QPixmap()
+                    pixmap.loadFromData(self._new_cover_data)
+                    scaled_pixmap = pixmap.scaled(
+                        self.disc_cover_label.size(),
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    self.disc_cover_label.setPixmap(scaled_pixmap)
+                    self.disc_cover_label.setText("")  # Clear text if image is loaded
+                except Exception as e:
+                    QMessageBox.warning(
+                        self, "Error Loading Image", f"Could not load image: {e}"
+                    )
+                    self._new_cover_data = None
 
 
 ################################################################################
