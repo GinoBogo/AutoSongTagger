@@ -293,10 +293,10 @@ class AutoSongTaggerUI(QWidget):
             ["Artist", "Title", "Album", "Year", "Genre"]
         )
         header = self.results_list.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(
-            2, QHeaderView.ResizeMode.Stretch
-        )  # Make Album column stretch
+            2, QHeaderView.ResizeMode.Interactive
+        )  # Set Album column to interactive size
+
         self.results_list.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
