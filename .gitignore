@@ -3,6 +3,7 @@
 .venv
 .vscode
 
+*.cfg
 *.zip
 
 github-markdown.css

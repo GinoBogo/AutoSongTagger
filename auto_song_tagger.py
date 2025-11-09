@@ -49,6 +49,7 @@ from mutagen.oggopus import OggOpus
 # Define constants
 RIGHT_VCENTER_ALIGNMENT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 NO_FILE_SELECTED_TEXT = "No file selected."
+CONFIG_FILE_NAME = "auto_song_tagger.cfg"
 
 # Setup MusicBrainz client
 musicbrainzngs.set_useragent("AutoSongTagger", "0.1", "your-email@example.com")
@@ -222,20 +223,10 @@ def parse_artist_title_from_filename(filename):
 
 
 class AutoSongTaggerUI(QWidget):
-    def __init__(self):
-        """Initializes the AutoSongTaggerUI application window."""
-        super().__init__()
-        self.setWindowTitle("Auto Song Tagger")
-        self.load_settings()  # Load settings before initializing UI
-        self.init_ui()
-        self._apply_styles()
-
-    ############################################################################
-
     def load_settings(self):
         """Loads window size and position from auto_song_tagger.cfg."""
         config = configparser.ConfigParser()
-        config_file = "auto_song_tagger.cfg"
+        config_file = CONFIG_FILE_NAME
 
         if os.path.exists(config_file):
             config.read(config_file)
@@ -246,14 +237,43 @@ class AutoSongTaggerUI(QWidget):
                     width = int(config["MainWindow"]["width"])
                     height = int(config["MainWindow"]["height"])
                     self.setGeometry(x, y, width, height)
-                    return
                 except ValueError:
                     print("Error reading window geometry from config. Using defaults.")
-        
-        # Default size and position if no config or error
-        self.setGeometry(100, 100, 800, 800)
+            if "ColumnWidths" in config:
+                try:
+                    widths_str = config["ColumnWidths"]["widths"]
+                    widths = [int(w) for w in widths_str.split(",")]
+                    self._column_widths_from_settings = widths
+                except ValueError:
+                    print("Error reading column widths from config. Using defaults.")
+            else:
+                self._column_widths_from_settings = []
+        else:
+            # Default size and position if no config or error
+            self.setGeometry(100, 100, 800, 800)
+            self._column_widths_from_settings = []
 
     ############################################################################
+
+    def apply_column_widths_from_settings(self):
+        """Applies column widths from auto_song_tagger.cfg."""
+        if (
+            hasattr(self, "_column_widths_from_settings")
+            and self._column_widths_from_settings
+        ):
+            header = self.results_list.horizontalHeader()
+            for i, w in enumerate(self._column_widths_from_settings):
+                if i < header.count():
+                    header.resizeSection(i, w)
+
+    def __init__(self):
+        """Initializes the AutoSongTaggerUI application window."""
+        super().__init__()
+        self.setWindowTitle("Auto Song Tagger")
+        self.load_settings()  # Load settings before initializing UI
+        self.init_ui()
+        self.apply_column_widths_from_settings()  # Apply column widths after UI is initialized
+        self._apply_styles()
 
     def init_ui(self):
         """Initializes the user interface components and layout."""
@@ -262,7 +282,7 @@ class AutoSongTaggerUI(QWidget):
         # MP3 File Selection
         file_layout = QHBoxLayout()
         self.file_label = QLabel("Audio File:")
-        self.file_label.setFixedWidth(70)
+        self.file_label.setFixedWidth(80)
         self.file_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
         self.file_path_input = QLineEdit()
         self.file_path_input.setReadOnly(True)
@@ -278,11 +298,11 @@ class AutoSongTaggerUI(QWidget):
         # Artist and Title Input
         input_layout = QHBoxLayout()
         self.artist_label = QLabel("Artist:")
-        self.artist_label.setFixedWidth(70)
+        self.artist_label.setFixedWidth(80)
         self.artist_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
         self.artist_input = QLineEdit()
         self.title_label = QLabel("Title:")
-        self.title_label.setFixedWidth(70)
+        self.title_label.setFixedWidth(80)
         self.title_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
         self.title_input = QLineEdit()
         input_layout.addWidget(self.artist_label)
@@ -333,7 +353,7 @@ class AutoSongTaggerUI(QWidget):
         # Artist
         artist_display_layout = QHBoxLayout()
         self.current_artist_label = QLabel("Artist:")
-        self.current_artist_label.setFixedWidth(50)  # Set a fixed width
+        self.current_artist_label.setFixedWidth(60)  # Set a fixed width
         self.current_artist_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
         self.current_artist_input = QLineEdit()
         self.current_artist_input.textChanged.connect(self._on_current_tag_text_changed)
@@ -344,7 +364,7 @@ class AutoSongTaggerUI(QWidget):
         # Title
         title_display_layout = QHBoxLayout()
         self.current_title_label = QLabel("Title:")
-        self.current_title_label.setFixedWidth(50)  # Set a fixed width
+        self.current_title_label.setFixedWidth(60)  # Set a fixed width
         self.current_title_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
         self.current_title_input = QLineEdit()
         self.current_title_input.textChanged.connect(self._on_current_tag_text_changed)
@@ -355,7 +375,7 @@ class AutoSongTaggerUI(QWidget):
         # Album
         album_display_layout = QHBoxLayout()
         self.current_album_label = QLabel("Album:")
-        self.current_album_label.setFixedWidth(50)  # Set a fixed width
+        self.current_album_label.setFixedWidth(60)  # Set a fixed width
         self.current_album_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
         self.current_album_input = QLineEdit()
         self.current_album_input.textChanged.connect(self._on_current_tag_text_changed)
@@ -366,7 +386,7 @@ class AutoSongTaggerUI(QWidget):
         # Year
         year_display_layout = QHBoxLayout()
         self.current_year_label = QLabel("Year:")
-        self.current_year_label.setFixedWidth(50)  # Set a fixed width
+        self.current_year_label.setFixedWidth(60)  # Set a fixed width
         self.current_year_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
         self.current_year_input = QLineEdit()
         self.current_year_input.textChanged.connect(self._on_current_tag_text_changed)
@@ -377,7 +397,7 @@ class AutoSongTaggerUI(QWidget):
         # Genre
         genre_display_layout = QHBoxLayout()
         self.current_genre_label = QLabel("Genre:")
-        self.current_genre_label.setFixedWidth(50)  # Set a fixed width
+        self.current_genre_label.setFixedWidth(60)  # Set a fixed width
         self.current_genre_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
         self.current_genre_input = QLineEdit()
         self.current_genre_input.textChanged.connect(self._on_current_tag_text_changed)
@@ -460,65 +480,6 @@ class AutoSongTaggerUI(QWidget):
 
     ############################################################################
 
-    ############################################################################
-
-    def _apply_styles(self):
-        """Applies CSS styles to the application.
-
-        Sets the stylesheet for the main application window.
-        """
-        self.setStyleSheet(
-            """
-            QWidget {
-                background-color: #f0f0f0;
-                color: #333;
-            }
-            QLineEdit, QTextEdit, QTableWidget {
-                background-color: #fff;
-                border: 1px solid #ccc;
-                border-radius: 4px;
-                padding: 5px;
-            }
-            QPushButton {
-                background-color: #0078d7;
-                color: #fff;
-                border: none;
-                border-radius: 4px;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #005a9e;
-            }
-            QPushButton#applyButton {
-                background-color: #FFA500;
-                color: #000000; /* Black text for better contrast */
-            }
-            QPushButton#applyButton:hover {
-                background-color: #E69500;
-            }
-            QPushButton#applyButton:pressed {
-                background-color: #CC8400;
-            }
-            QPushButton:pressed {
-                background-color: #004578;
-            }
-            QPushButton:disabled {
-                background-color: #d3d3d3;
-                color: #888;
-            }
-            QProgressBar {
-                border: 1px solid #ccc;
-                border-radius: 4px;
-                text-align: center;
-            }
-            QProgressBar::chunk {
-                background-color: #4CAF50;
-            }
-        """
-        )
-
-    ############################################################################
-
     def save_settings(self):
         """Saves current window size and position to auto_song_tagger.cfg."""
         config = configparser.ConfigParser()
@@ -528,8 +489,14 @@ class AutoSongTaggerUI(QWidget):
             "width": str(self.width()),
             "height": str(self.height()),
         }
-        with open("auto_song_tagger.cfg", "w") as configfile:
-            config.write(configfile)
+
+        # Save column widths
+        header = self.results_list.horizontalHeader()
+        column_widths = [str(header.sectionSize(i)) for i in range(header.count())]
+        config["ColumnWidths"] = {"widths": ",".join(column_widths)}
+
+        with open(CONFIG_FILE_NAME, "w") as config_file:
+            config.write(config_file)
 
     ############################################################################
 
