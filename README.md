@@ -13,6 +13,8 @@ AutoSongTagger is a Python GUI application designed to automatically tag and org
 - **Tag Application:** Applies selected metadata as tags to the audio file.
 - **Supported Formats:** MP3 and Ogg Opus.
 
+![figure_01.png](docs/images/figure_01.png)
+
 ## Installation
 
 ### Prerequisites
@@ -24,7 +26,7 @@ AutoSongTagger is a Python GUI application designed to automatically tag and org
 ### Steps
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/AutoSongTagger.git
+   git clone https://github.com/GinoBogo/AutoSongTagger.git
    cd AutoSongTagger
    ```
 2. Create a virtual environment (recommended):
