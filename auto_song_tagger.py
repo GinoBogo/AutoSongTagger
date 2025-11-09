@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QProgressBar,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -72,8 +73,10 @@ class TagWriterThread(QThread):
     def run(self):
         try:
             self.progress_signal.emit("Starting tag update...")
+
             if self.cover_data:
                 self.progress_signal.emit("Processing cover art...")
+
             self.progress_signal.emit("Saving file...")
             write_tags(self.song_file, self.metadata, self.cover_data)
             self.finished.emit(True, "ID3 tags updated successfully!")
