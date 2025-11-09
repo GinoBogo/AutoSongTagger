@@ -17,6 +17,7 @@ This script provides a user interface to:
 import base64
 import os
 import sys
+import configparser
 
 import musicbrainzngs
 
@@ -225,13 +226,32 @@ class AutoSongTaggerUI(QWidget):
         """Initializes the AutoSongTaggerUI application window."""
         super().__init__()
         self.setWindowTitle("Auto Song Tagger")
-        self.setGeometry(100, 100, 800, 800)
-
-        self.song_file_path = ""
-        self.metadata_options = []
-
+        self.load_settings()  # Load settings before initializing UI
         self.init_ui()
         self._apply_styles()
+
+    ############################################################################
+
+    def load_settings(self):
+        """Loads window size and position from auto_song_tagger.cfg."""
+        config = configparser.ConfigParser()
+        config_file = "auto_song_tagger.cfg"
+
+        if os.path.exists(config_file):
+            config.read(config_file)
+            if "MainWindow" in config:
+                try:
+                    x = int(config["MainWindow"]["x"])
+                    y = int(config["MainWindow"]["y"])
+                    width = int(config["MainWindow"]["width"])
+                    height = int(config["MainWindow"]["height"])
+                    self.setGeometry(x, y, width, height)
+                    return
+                except ValueError:
+                    print("Error reading window geometry from config. Using defaults.")
+        
+        # Default size and position if no config or error
+        self.setGeometry(100, 100, 800, 800)
 
     ############################################################################
 
@@ -437,6 +457,86 @@ class AutoSongTaggerUI(QWidget):
             }
         """
         )
+
+    ############################################################################
+
+    ############################################################################
+
+    def _apply_styles(self):
+        """Applies CSS styles to the application.
+
+        Sets the stylesheet for the main application window.
+        """
+        self.setStyleSheet(
+            """
+            QWidget {
+                background-color: #f0f0f0;
+                color: #333;
+            }
+            QLineEdit, QTextEdit, QTableWidget {
+                background-color: #fff;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                padding: 5px;
+            }
+            QPushButton {
+                background-color: #0078d7;
+                color: #fff;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #005a9e;
+            }
+            QPushButton#applyButton {
+                background-color: #FFA500;
+                color: #000000; /* Black text for better contrast */
+            }
+            QPushButton#applyButton:hover {
+                background-color: #E69500;
+            }
+            QPushButton#applyButton:pressed {
+                background-color: #CC8400;
+            }
+            QPushButton:pressed {
+                background-color: #004578;
+            }
+            QPushButton:disabled {
+                background-color: #d3d3d3;
+                color: #888;
+            }
+            QProgressBar {
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                background-color: #4CAF50;
+            }
+        """
+        )
+
+    ############################################################################
+
+    def save_settings(self):
+        """Saves current window size and position to auto_song_tagger.cfg."""
+        config = configparser.ConfigParser()
+        config["MainWindow"] = {
+            "x": str(self.x()),
+            "y": str(self.y()),
+            "width": str(self.width()),
+            "height": str(self.height()),
+        }
+        with open("auto_song_tagger.cfg", "w") as configfile:
+            config.write(configfile)
+
+    ############################################################################
+
+    def closeEvent(self, event):
+        """Overrides the close event to save window settings."""
+        self.save_settings()
+        event.accept()
 
     ############################################################################
 
