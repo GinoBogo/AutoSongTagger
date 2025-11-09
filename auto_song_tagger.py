@@ -124,7 +124,7 @@ def fetch_song_metadata(artist, title):
 ################################################################################
 
 
-def get_audio_file(file_path):
+def get_audio_file(file_path: str):
     """Factory function to return the correct mutagen audio object based on file
     extension."""
     _, ext = os.path.splitext(file_path)
@@ -147,12 +147,16 @@ def _write_mp3_tags(audio: MP3, metadata: dict[str, str]):
 
     if metadata.get("artist"):
         audio.tags["TPE1"] = TPE1(encoding=3, text=[metadata["artist"]])
+
     if metadata.get("title"):
         audio.tags["TIT2"] = TIT2(encoding=3, text=[metadata["title"]])
+
     if metadata.get("album"):
         audio.tags["TALB"] = TALB(encoding=3, text=[metadata["album"]])
+
     if metadata.get("year"):
         audio.tags["TDRC"] = TDRC(encoding=3, text=[metadata["year"][:4]])
+
     if metadata.get("genre"):
         audio.tags["TCON"] = TCON(encoding=3, text=[metadata["genre"]])
 
@@ -167,12 +171,16 @@ def _write_ogg_opus_tags(audio: OggOpus, metadata: dict[str, str]):
 
     if metadata.get("artist"):
         audio.tags["artist"] = metadata["artist"]
+
     if metadata.get("title"):
         audio.tags["title"] = metadata["title"]
+
     if metadata.get("album"):
         audio.tags["album"] = metadata["album"]
+
     if metadata.get("year"):
         audio.tags["date"] = metadata["year"]
+
     if metadata.get("genre"):
         audio.tags["genre"] = metadata["genre"]
 
@@ -246,6 +254,7 @@ def write_tags(
     }
 
     writer = tag_writers.get(type(audio))
+
     if writer:
         writer(audio, metadata)
     else:
@@ -299,6 +308,7 @@ class AutoSongTaggerUI(QWidget):
 
         if os.path.exists(config_file):
             config.read(config_file)
+
             if "MainWindow" in config:
                 try:
                     x = int(config["MainWindow"]["x"])
@@ -308,6 +318,7 @@ class AutoSongTaggerUI(QWidget):
                     self.setGeometry(x, y, width, height)
                 except ValueError:
                     print("Error reading window geometry from config. Using defaults.")
+
             if "ColumnWidths" in config:
                 try:
                     widths_str = config["ColumnWidths"]["widths"]
@@ -326,11 +337,9 @@ class AutoSongTaggerUI(QWidget):
 
     def apply_column_widths_from_settings(self):
         """Applies column widths from auto_song_tagger.cfg."""
-        if (
-            hasattr(self, "_column_widths_from_settings")
-            and self._column_widths_from_settings
-        ):
+        if getattr(self, "_column_widths_from_settings", []):
             header = self.results_list.horizontalHeader()
+
             for i, w in enumerate(self._column_widths_from_settings):
                 if i < header.count():
                     header.resizeSection(i, w)
@@ -606,6 +615,7 @@ class AutoSongTaggerUI(QWidget):
         """
         if self.song_file_path:
             artist, title = parse_artist_title_from_filename(self.song_file_path)
+
             if artist and title:
                 self.artist_input.setText(artist)
                 self.title_input.setText(title)
@@ -634,8 +644,10 @@ class AutoSongTaggerUI(QWidget):
         """Extracts ID3 tags from an MP3 file."""
         tags = audio.tags
         year = "N/A"
+
         if "TDRC" in tags and tags["TDRC"].text:
             year_str = str(tags["TDRC"].text[0])
+
             if len(year_str) >= 4 and year_str[:4].isdigit():
                 year = year_str[:4]
 
@@ -705,10 +717,12 @@ class AutoSongTaggerUI(QWidget):
     def display_current_tags(self):
         """Displays the current tags of the selected audio file."""
         audio, handled = self._handle_initial_tag_display_checks()
+
         if handled:
             return
 
         tags = self._extract_tags_from_audio(audio)
+
         if not tags:
             return  # Should not happen
 
@@ -757,6 +771,7 @@ class AutoSongTaggerUI(QWidget):
             return
 
         cover_data: bytes | None = None
+
         if isinstance(audio, MP3):
             cover_data = self._extract_mp3_cover(audio)
         elif isinstance(audio, OggOpus):
@@ -931,12 +946,14 @@ class AutoSongTaggerUI(QWidget):
 
         # Check if any changes have been made to the current tags
         tags_changed = False
+
         if hasattr(self, "_original_tags"):
             if self._original_tags != current_edited_tags:
                 tags_changed = True
         else:
             # If no original tags were loaded, assume changes if fields are not
             # empty
+
             if any(current_edited_tags.values()):
                 tags_changed = True
 
@@ -944,6 +961,7 @@ class AutoSongTaggerUI(QWidget):
         row_selected = bool(self.results_list.selectedIndexes())
 
         # Enable button if tags changed OR a row is selected
+
         if tags_changed or row_selected:
             self.apply_button.setEnabled(True)
         else:
@@ -957,8 +975,10 @@ class AutoSongTaggerUI(QWidget):
         """
         file_dialog = QFileDialog(self)
         file_dialog.setNameFilter("Image files (*.png *.jpg *.jpeg *.bmp *.gif *.webp)")
+
         if file_dialog.exec():
             selected_files = file_dialog.selectedFiles()
+
             if selected_files:
                 image_path = selected_files[0]
                 try:
