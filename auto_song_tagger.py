@@ -520,6 +520,7 @@ class AutoSongTaggerUI(QWidget):
             "background-color: #e0e0e0; border: 1px solid #ccc;"
         )
         self.disc_cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.disc_cover_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.disc_cover_label.clicked.connect(self._on_disc_cover_clicked)
         tags_and_cover_layout.addWidget(self.disc_cover_label)
 
