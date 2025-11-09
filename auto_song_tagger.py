@@ -28,7 +28,7 @@ from mutagen.id3._frames import TALB, TDRC, TPE1, TIT2, TCON, APIC  # noqa: F401
 from mutagen.mp3 import MP3
 from mutagen.oggopus import OggOpus
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -55,6 +55,25 @@ CONFIG_FILE_NAME = "auto_song_tagger.cfg"
 musicbrainzngs.set_useragent("AutoSongTagger", "0.1", "your-email@example.com")
 
 ################################################################################
+
+
+class TagWriterThread(QThread):
+    """A QThread subclass to perform tag writing in a separate thread."""
+
+    finished = Signal(bool, str)  # Signal(success, message)
+
+    def __init__(self, song_file, metadata, cover_data, parent=None):
+        super().__init__(parent)
+        self.song_file = song_file
+        self.metadata = metadata
+        self.cover_data = cover_data
+
+    def run(self):
+        try:
+            write_tags(self.song_file, self.metadata, self.cover_data)
+            self.finished.emit(True, "ID3 tags updated successfully!")
+        except Exception as e:
+            self.finished.emit(False, f"Failed to apply tags: {e}")
 
 
 class ClickableLabel(QLabel):
@@ -244,9 +263,9 @@ def write_tags(
     """
     try:
         audio = get_audio_file(song_file)
-    except MutagenError:
-        print(f"Error loading {song_file}")
-        return
+    except MutagenError as e:
+        print(f"Error loading {song_file}: {e}")
+        raise  # Re-raise the exception to propagate the error
 
     tag_writers = {
         MP3: _write_mp3_tags,
@@ -919,16 +938,31 @@ class AutoSongTaggerUI(QWidget):
             "genre": self.current_genre_input.text(),
         }
 
-        if chosen_metadata:
-            write_tags(self.song_file_path, chosen_metadata, self._new_cover_data)
-            QMessageBox.information(
-                self, "Tags Applied", "ID3 tags updated successfully!"
-            )
+        if not chosen_metadata:
+            QMessageBox.warning(self, "Error", "No metadata to apply.")
+            return
+
+        # Disable apply button to prevent multiple clicks
+        self.apply_button.setEnabled(False)
+
+        self.tag_writer_thread = TagWriterThread(
+            self.song_file_path, chosen_metadata, self._new_cover_data
+        )
+        self.tag_writer_thread.finished.connect(self._on_tags_written)
+        self.tag_writer_thread.start()
+
+    def _on_tags_written(self, success, message):
+        """Slot to handle the result of the tag writing thread."""
+        if success:
+            QMessageBox.information(self, "Tags Applied", message)
             self.display_current_tags()
             self.display_current_cover()
             self._new_cover_data = None  # Clear the new cover data after applying
         else:
-            QMessageBox.warning(self, "Error", "Failed to apply tags.")
+            QMessageBox.warning(self, "Error", message)
+
+        # Re-enable apply button
+        self.apply_button.setEnabled(True)
 
     ############################################################################
 
