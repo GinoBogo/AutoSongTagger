@@ -53,7 +53,9 @@ NO_FILE_SELECTED_TEXT = "No file selected."
 CONFIG_FILE_NAME = "auto_song_tagger.cfg"
 
 # Setup MusicBrainz client
-musicbrainzngs.set_useragent("AutoSongTagger", "0.1", "your-email@example.com")
+musicbrainzngs.set_useragent(
+    str("AutoSongTagger"), str("0.1"), str("your-email@example.com")
+)
 
 ################################################################################
 
