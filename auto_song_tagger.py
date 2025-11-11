@@ -23,8 +23,9 @@ import musicbrainzngs
 
 from mutagen._util import MutagenError
 from mutagen.flac import Picture
+
 from mutagen.id3 import ID3
-from mutagen.id3._frames import TALB, TDRC, TPE1, TIT2, TCON, APIC  # noqa: F401
+from mutagen.id3._frames import TALB, TDRC, TPE1, TIT2, TCON, APIC, TRCK  # noqa: F401
 from mutagen.mp3 import MP3
 from mutagen.oggopus import OggOpus
 
@@ -117,6 +118,7 @@ def fetch_song_metadata(artist, title):
         album = ""
         year = ""
         genre = ""
+        track = ""
 
         if "release-list" in recording and recording["release-list"]:
             # Prioritize releases with a date
@@ -130,9 +132,20 @@ def fetch_song_metadata(artist, title):
                 album = chosen_release["title"]
                 year = chosen_release["date"]
             else:
-                # If no release has a date, just take the first release
+                # If no release has a date, just take the first one
                 chosen_release = recording["release-list"][0]
                 album = chosen_release["title"]
+
+            # Find track number in the chosen release
+            if "medium-list" in chosen_release:
+                for medium in chosen_release["medium-list"]:
+                    if "track-list" in medium:
+                        for t in medium["track-list"]:
+                            if t["recording"]["id"] == recording["id"]:
+                                track = t["number"]
+                                break
+                    if track:
+                        break
 
         if "tag-list" in recording and recording["tag-list"]:
             # Take the first tag as genre, or concatenate multiple
@@ -143,6 +156,7 @@ def fetch_song_metadata(artist, title):
             "artist": artist,
             "album": album,
             "year": year,
+            "track": track,
             "genre": genre,
         }
         recordings_metadata.append(metadata)
@@ -186,6 +200,9 @@ def _write_mp3_tags(audio: MP3, metadata: dict[str, str]):
     if metadata.get("year"):
         audio.tags["TDRC"] = TDRC(encoding=3, text=[metadata["year"][:4]])
 
+    if metadata.get("track"):
+        audio.tags["TRCK"] = TRCK(encoding=3, text=[metadata["track"]])
+
     if metadata.get("genre"):
         audio.tags["TCON"] = TCON(encoding=3, text=[metadata["genre"]])
 
@@ -209,6 +226,9 @@ def _write_ogg_opus_tags(audio: OggOpus, metadata: dict[str, str]):
 
     if metadata.get("year"):
         audio.tags["date"] = metadata["year"]
+
+    if metadata.get("track"):
+        audio.tags["tracknumber"] = metadata["track"]
 
     if metadata.get("genre"):
         audio.tags["genre"] = metadata["genre"]
@@ -436,9 +456,9 @@ class AutoSongTaggerUI(QWidget):
         # Metadata Results
         self.results_label = QLabel("Metadata Options:")
         self.results_list = QTableWidget()
-        self.results_list.setColumnCount(5)  # Artist, Title, Album, Year, Genre
+        self.results_list.setColumnCount(6)  # Artist, Title, Album, Year, Track, Genre
         self.results_list.setHorizontalHeaderLabels(
-            ["Artist", "Title", "Album", "Year", "Genre"]
+            ["Artist", "Title", "Album", "Year", "Track", "Genre"]
         )
         header = self.results_list.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
@@ -501,6 +521,17 @@ class AutoSongTaggerUI(QWidget):
         year_display_layout.addWidget(self.current_year_label)
         year_display_layout.addWidget(self.current_year_input)
         current_tags_input_layout.addLayout(year_display_layout)
+
+        # Track
+        track_display_layout = QHBoxLayout()
+        self.current_track_label = QLabel("Track:")
+        self.current_track_label.setFixedWidth(60)
+        self.current_track_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
+        self.current_track_input = QLineEdit()
+        self.current_track_input.textChanged.connect(self._on_current_tag_text_changed)
+        track_display_layout.addWidget(self.current_track_label)
+        track_display_layout.addWidget(self.current_track_input)
+        current_tags_input_layout.addLayout(track_display_layout)
 
         # Genre
         genre_display_layout = QHBoxLayout()
@@ -643,7 +674,7 @@ class AutoSongTaggerUI(QWidget):
                 self.parse_filename_for_artist_title()
                 self.results_list.clear()
                 self.results_list.setHorizontalHeaderLabels(
-                    ["Artist", "Title", "Album", "Year", "Genre"]
+                    ["Artist", "Title", "Album", "Year", "Track", "Genre"]
                 )
                 self.apply_button.setEnabled(False)
 
@@ -668,6 +699,7 @@ class AutoSongTaggerUI(QWidget):
         self.current_title_input.clear()
         self.current_album_input.clear()
         self.current_year_input.clear()
+        self.current_track_input.clear()
         self.current_genre_input.clear()
 
     ############################################################################
@@ -696,6 +728,7 @@ class AutoSongTaggerUI(QWidget):
             "title": self._get_mp3_tag_value(tags, "TIT2"),
             "album": self._get_mp3_tag_value(tags, "TALB"),
             "year": year,
+            "track": self._get_mp3_tag_value(tags, "TRCK"),
             "genre": self._get_mp3_tag_value(tags, "TCON"),
         }
 
@@ -709,6 +742,7 @@ class AutoSongTaggerUI(QWidget):
             "title": tags.get("title", ["N/A"])[0],
             "album": tags.get("album", ["N/A"])[0],
             "year": tags.get("date", ["N/A"])[0],
+            "track": tags.get("tracknumber", ["N/A"])[0],
             "genre": tags.get("genre", ["N/A"])[0],
         }
 
@@ -730,6 +764,7 @@ class AutoSongTaggerUI(QWidget):
         self.current_title_input.setText(tags.get("title", "N/A"))
         self.current_album_input.setText(tags.get("album", "N/A"))
         self.current_year_input.setText(tags.get("year", "N/A"))
+        self.current_track_input.setText(tags.get("track", "N/A"))
         self.current_genre_input.setText(tags.get("genre", "N/A"))
 
     ############################################################################
@@ -892,9 +927,13 @@ class AutoSongTaggerUI(QWidget):
             year_item.setFlags(year_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.results_list.setItem(row_position, 3, year_item)
 
+            track_item = QTableWidgetItem(meta["track"])
+            track_item.setFlags(track_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.results_list.setItem(row_position, 4, track_item)
+
             genre_item = QTableWidgetItem(meta["genre"])
             genre_item.setFlags(genre_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.results_list.setItem(row_position, 4, genre_item)
+            self.results_list.setItem(row_position, 5, genre_item)
 
         self.results_list.resizeColumnsToContents()
 
@@ -919,7 +958,9 @@ class AutoSongTaggerUI(QWidget):
             album = album_item.text() if album_item else ""
             year_item = self.results_list.item(selected_row, 3)
             year = year_item.text() if year_item else ""
-            genre_item = self.results_list.item(selected_row, 4)
+            track_item = self.results_list.item(selected_row, 4)
+            track = track_item.text() if track_item else ""
+            genre_item = self.results_list.item(selected_row, 5)
             genre = genre_item.text() if genre_item else ""
 
             # Populate current tag display fields
@@ -927,6 +968,7 @@ class AutoSongTaggerUI(QWidget):
             self.current_title_input.setText(title)
             self.current_album_input.setText(album)
             self.current_year_input.setText(year)
+            self.current_track_input.setText(track)
             self.current_genre_input.setText(genre)
             # Update button state after populating fields
             self._on_current_tag_text_changed()
@@ -937,6 +979,7 @@ class AutoSongTaggerUI(QWidget):
             self.current_title_input.clear()
             self.current_album_input.clear()
             self.current_year_input.clear()
+            self.current_track_input.clear()
             self.current_genre_input.clear()
             # Update button state after clearing fields
             self._on_current_tag_text_changed()
@@ -952,6 +995,7 @@ class AutoSongTaggerUI(QWidget):
             "title": self.current_title_input.text(),
             "album": self.current_album_input.text(),
             "year": self.current_year_input.text(),
+            "track": self.current_track_input.text(),
             "genre": self.current_genre_input.text(),
         }
 
@@ -1006,6 +1050,7 @@ class AutoSongTaggerUI(QWidget):
             "title": self.current_title_input.text(),
             "album": self.current_album_input.text(),
             "year": self.current_year_input.text(),
+            "track": self.current_track_input.text(),
             "genre": self.current_genre_input.text(),
         }
 
