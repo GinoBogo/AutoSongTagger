@@ -297,7 +297,7 @@ def _get_track_number(release: dict, recording_id: str) -> str:
 def _get_genre(recording: dict) -> str:
     """Extract genre from a recording's tag list."""
     if "tag-list" in recording and recording["tag-list"]:
-        return ", ".join([tag["name"] for tag in recording["tag-list"]])
+        return recording["tag-list"][0]["name"]
     return ""
 
 
@@ -980,6 +980,10 @@ class AutoSongTaggerUI(QWidget):
         def get_tag(tag_name, default="N/A"):
             return tags[tag_name][0] if tag_name in tags else default
 
+        genre_value = get_tag("genre")
+        if genre_value != "N/A":
+            genre_value = genre_value.title()
+
         return {
             "artist": get_tag("artist"),
             "title": get_tag("title"),
@@ -991,7 +995,7 @@ class AutoSongTaggerUI(QWidget):
                 and "/" in get_tag("tracknumber")
                 else get_tag("tracknumber")
             ),
-            "genre": get_tag("genre"),
+            "genre": genre_value,
         }
 
     def _populate_tag_fields(self, tags: dict[str, str]):
@@ -1013,6 +1017,14 @@ class AutoSongTaggerUI(QWidget):
     def _get_input_text_value(self, input_widget: Optional[QLineEdit]) -> str:
         """Safely get text from a QLineEdit widget, returning an empty string if None."""
         return input_widget.text() if input_widget else ""
+
+    def _process_genre_string(self, genre_str: str) -> str:
+        """Extracts the first genre and converts it to title case."""
+        if not genre_str:
+            return ""
+        # Split by common delimiters and take the first part
+        first_genre = genre_str.split(',')[0].split(';')[0].strip()
+        return first_genre.title()
 
     # =========================================================================
     # COVER ART HANDLING
@@ -1150,6 +1162,10 @@ class AutoSongTaggerUI(QWidget):
 
         # Populate results table
         for meta in self.metadata_options:
+            # Process genre before displaying
+            if "genre" in meta:
+                meta["genre"] = self._process_genre_string(meta["genre"])
+
             row_position = self.results_list.rowCount()
             self.results_list.insertRow(row_position)
 
