@@ -206,6 +206,22 @@ def _get_release_info(recording: dict, release_cache: dict) -> tuple[str, str, s
 def _process_recording(recording: dict, artist: str, release_cache: dict) -> dict:
     """Process a single recording from MusicBrainz search result."""
     album, year, track = _get_release_info(recording, release_cache)
+
+    # Fetch full recording details if tags are not present
+    if "tag-list" not in recording or not recording["tag-list"]:
+        recording_id = recording.get("id")
+        if recording_id:
+            try:
+                full_recording = musicbrainzngs.get_recording_by_id(
+                    recording_id, includes=["tags"]
+                )
+                if "recording" in full_recording:
+                    recording = full_recording[
+                        "recording"
+                    ]  # Use the enriched recording
+            except musicbrainzngs.WebServiceError as exc:
+                print(f"Error fetching full recording details: {exc}")
+
     genre = _get_genre(recording)
 
     return {
