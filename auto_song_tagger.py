@@ -168,7 +168,13 @@ def _get_release_info(recording: dict, release_cache: dict) -> tuple[str, str, s
 
     chosen_release = _choose_release(recording["release-list"])
     album = chosen_release.get("title", "")
-    year = chosen_release.get("date", "")
+
+    date_str = chosen_release.get("date", "")
+    if len(date_str) >= 4 and date_str[:4].isdigit():
+        year = date_str[:4]
+    else:
+        year = ""
+
     release_id = chosen_release.get("id")
 
     if not release_id:
@@ -887,6 +893,7 @@ class AutoSongTaggerUI(QWidget):
         if handled:
             return
 
+        assert audio is not None
         tags = self._extract_tags_from_audio(audio)
         if not tags:
             return
