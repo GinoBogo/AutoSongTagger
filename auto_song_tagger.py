@@ -913,12 +913,35 @@ class AutoSongTaggerUI(QWidget):
 
     def _clear_tag_fields(self, message: str | None = None):
         """Clear the tag display fields."""
-        self.current_artist_input.setText(message or "")
-        self.current_title_input.clear()
-        self.current_album_input.clear()
-        self.current_year_input.clear()
-        self.current_track_input.clear()
-        self.current_genre_input.clear()
+        # Check if input fields are initialized before attempting to set text or clear
+        # This prevents errors if _clear_tag_fields is called before init_ui completes
+        if (
+            hasattr(self, "current_artist_input")
+            and self.current_artist_input is not None
+        ):
+            self.current_artist_input.setText(message if message is not None else "")
+        if (
+            hasattr(self, "current_title_input")
+            and self.current_title_input is not None
+        ):
+            self.current_title_input.clear()
+        if (
+            hasattr(self, "current_album_input")
+            and self.current_album_input is not None
+        ):
+            self.current_album_input.clear()
+        if hasattr(self, "current_year_input") and self.current_year_input is not None:
+            self.current_year_input.clear()
+        if (
+            hasattr(self, "current_track_input")
+            and self.current_track_input is not None
+        ):
+            self.current_track_input.clear()
+        if (
+            hasattr(self, "current_genre_input")
+            and self.current_genre_input is not None
+        ):
+            self.current_genre_input.clear()
 
     def _extract_mp3_tags(self, audio: MP3) -> dict[str, str]:
         """Extract ID3 tags from an MP3 file."""
@@ -950,10 +973,9 @@ class AutoSongTaggerUI(QWidget):
         """Extract tags from an OggOpus file."""
         tags = audio.tags
         if tags is None:
-            return {
-                field: "N/A"
-                for field in ["artist", "title", "album", "year", "track", "genre"]
-            }
+            return dict.fromkeys(
+                ["artist", "title", "album", "year", "track", "genre"], "N/A"
+            )
 
         def get_tag(tag_name, default="N/A"):
             return tags[tag_name][0] if tag_name in tags else default
@@ -963,18 +985,34 @@ class AutoSongTaggerUI(QWidget):
             "title": get_tag("title"),
             "album": get_tag("album"),
             "year": get_tag("date"),
-            "track": get_tag("tracknumber"),
+            "track": (
+                get_tag("tracknumber").split("/")[0]
+                if isinstance(get_tag("tracknumber"), str)
+                and "/" in get_tag("tracknumber")
+                else get_tag("tracknumber")
+            ),
             "genre": get_tag("genre"),
         }
 
     def _populate_tag_fields(self, tags: dict[str, str]):
         """Populate UI fields with the given tags."""
-        self.current_artist_input.setText(tags.get("artist", "N/A"))
-        self.current_title_input.setText(tags.get("title", "N/A"))
-        self.current_album_input.setText(tags.get("album", "N/A"))
-        self.current_year_input.setText(tags.get("year", "N/A"))
-        self.current_track_input.setText(tags.get("track", "N/A"))
-        self.current_genre_input.setText(tags.get("genre", "N/A"))
+        # Ensure input fields are initialized before setting text
+        if self.current_artist_input:
+            self.current_artist_input.setText(tags.get("artist", "N/A"))
+        if self.current_title_input:
+            self.current_title_input.setText(tags.get("title", "N/A"))
+        if self.current_album_input:
+            self.current_album_input.setText(tags.get("album", "N/A"))
+        if self.current_year_input:
+            self.current_year_input.setText(tags.get("year", "N/A"))
+        if self.current_track_input:
+            self.current_track_input.setText(tags.get("track", "N/A"))
+        if self.current_genre_input:
+            self.current_genre_input.setText(tags.get("genre", "N/A"))
+
+    def _get_input_text_value(self, input_widget: Optional[QLineEdit]) -> str:
+        """Safely get text from a QLineEdit widget, returning an empty string if None."""
+        return input_widget.text() if input_widget else ""
 
     # =========================================================================
     # COVER ART HANDLING
@@ -1169,12 +1207,12 @@ class AutoSongTaggerUI(QWidget):
     def apply_tags(self):
         """Apply selected metadata as tags to audio file."""
         chosen_metadata = {
-            "artist": self.current_artist_input.text(),
-            "title": self.current_title_input.text(),
-            "album": self.current_album_input.text(),
-            "year": self.current_year_input.text(),
-            "track": self.current_track_input.text(),
-            "genre": self.current_genre_input.text(),
+            "artist": self._get_input_text_value(self.current_artist_input),
+            "title": self._get_input_text_value(self.current_title_input),
+            "album": self._get_input_text_value(self.current_album_input),
+            "year": self._get_input_text_value(self.current_year_input),
+            "track": self._get_input_text_value(self.current_track_input),
+            "genre": self._get_input_text_value(self.current_genre_input),
         }
 
         if not any(chosen_metadata.values()):
@@ -1216,12 +1254,12 @@ class AutoSongTaggerUI(QWidget):
             return
 
         current_tags = {
-            "artist": self.current_artist_input.text(),
-            "title": self.current_title_input.text(),
-            "album": self.current_album_input.text(),
-            "year": self.current_year_input.text(),
-            "track": self.current_track_input.text(),
-            "genre": self.current_genre_input.text(),
+            "artist": self._get_input_text_value(self.current_artist_input),
+            "title": self._get_input_text_value(self.current_title_input),
+            "album": self._get_input_text_value(self.current_album_input),
+            "year": self._get_input_text_value(self.current_year_input),
+            "track": self._get_input_text_value(self.current_track_input),
+            "genre": self._get_input_text_value(self.current_genre_input),
         }
 
         # Check if changes were made from original tags
