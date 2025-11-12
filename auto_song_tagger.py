@@ -5,10 +5,14 @@ TheAudioDB, Deezer, and Lyrics.ovh APIs.
 
 Author: Gino Bogo
 
-Features: - Select audio files (MP3 or Opus) - Parse artist and title from
-filename - Fetch metadata from MusicBrainz and public APIs - Display current
-file tags - Choose from multiple metadata options - Apply selected metadata as
-tags - Handle cover art from multiple sources
+Features:
+ - Select audio files (MP3 or Opus)
+ - Parse artist and title from filename
+ - Fetch metadata from MusicBrainz and public APIs
+ - Display current file tags
+ - Choose from multiple metadata options
+ - Apply selected metadata as tags
+ - Handle cover art from multiple sources
 """
 
 import base64
@@ -55,6 +59,260 @@ CONFIG_FILE_NAME = "auto_song_tagger.cfg"
 
 # MusicBrainz client setup
 musicbrainzngs.set_useragent("AutoSongTagger", "0.1", "your-email@example.com")
+
+
+# =============================================================================
+# UTILITY FUNCTIONS
+# =============================================================================
+
+
+def parse_artist_title_from_filename(filename: str) -> tuple[str | None, str | None]:
+    """Parse artist and title from a filename (Artist - Title.ext)."""
+    base_name = os.path.splitext(os.path.basename(filename))[0]
+
+    if " - " in base_name:
+        parts = base_name.split(" - ", 1)
+        artist = parts[0].strip()
+        title = parts[1].strip()
+        return artist, title
+
+    return None, None
+
+
+def get_audio_file(file_path: str) -> MP3 | OggOpus:
+    """Factory function to return the correct mutagen audio object."""
+    _, ext = os.path.splitext(file_path)
+
+    if ext.lower() == ".mp3":
+        return MP3(file_path)
+    elif ext.lower() == ".opus":
+        return OggOpus(file_path)
+    else:
+        raise MutagenError(f"Unsupported file type: {ext}")
+
+
+def _process_genre_string(genre_str: str) -> str:
+    """Extracts the first genre and converts it to title case."""
+    if not genre_str:
+        return ""
+    # Split by common delimiters and take the first part
+    first_genre = genre_str.split(",")[0].split(";")[0].strip()
+    return first_genre.title()
+
+
+# =============================================================================
+# MUSICBRAINZ API FUNCTIONS
+# =============================================================================
+
+
+def _get_track_number(release: dict, recording_id: str) -> str:
+    """Find the track number for a recording within a release."""
+    if "medium-list" in release:
+        for medium in release["medium-list"]:
+            if "track-list" in medium:
+                for track in medium["track-list"]:
+                    if track.get("recording", {}).get("id") == recording_id:
+                        return track.get("number", "")
+    return ""
+
+
+def _get_genre(recording: dict) -> str:
+    """Extract genre from a recording's tag list."""
+    if "tag-list" in recording and recording["tag-list"]:
+        return recording["tag-list"][0]["name"]
+    return ""
+
+
+def _choose_release(release_list: list) -> dict:
+    """Choose the best release from a list of releases."""
+    releases_with_date = [r for r in release_list if "date" in r]
+    return releases_with_date[0] if releases_with_date else release_list[0]
+
+
+def _fetch_and_cache_release_details(
+    release_id: str, release_cache: dict
+) -> dict | None:
+    """Fetch release details from MusicBrainz and cache them."""
+    if release_id in release_cache:
+        return release_cache[release_id]
+
+    try:
+        release_details = musicbrainzngs.get_release_by_id(
+            release_id, includes=["recordings"]
+        )
+        release_cache[release_id] = release_details
+        return release_details
+    except musicbrainzngs.WebServiceError as exc:
+        print(f"Error fetching release details from MusicBrainz: {exc}")
+        return None
+
+
+def _process_recording(recording: dict, artist: str, release_cache: dict) -> dict:
+    """Process a single recording from MusicBrainz search result."""
+    album, year, track = "", "", ""
+
+    # Get release info
+    if "release-list" in recording and recording["release-list"]:
+        chosen_release = _choose_release(recording["release-list"])
+        album = chosen_release.get("title", "")
+
+        date_str = chosen_release.get("date", "")
+        if len(date_str) >= 4 and date_str[:4].isdigit():
+            year = date_str[:4]
+
+        release_id = chosen_release.get("id")
+        if release_id:
+            release_details = _fetch_and_cache_release_details(
+                release_id, release_cache
+            )
+            if release_details and "release" in release_details:
+                track = _get_track_number(release_details["release"], recording["id"])
+
+    # Get genre
+    genre = _get_genre(recording)
+
+    # Store release_id for cover art
+    release_id = ""
+    if "release-list" in recording and recording["release-list"]:
+        chosen_release = _choose_release(recording["release-list"])
+        release_id = chosen_release.get("id", "")
+
+    return {
+        "title": recording.get("title", ""),
+        "artist": artist,
+        "album": album,
+        "year": year,
+        "track": track,
+        "genre": genre,
+        "source": "MusicBrainz",
+        "release_id": release_id,
+        "cover_url": None,
+    }
+
+
+def fetch_song_metadata(artist: str, title: str) -> list[dict]:
+    """Fetch song metadata from MusicBrainz based on artist and title."""
+    try:
+        result = musicbrainzngs.search_recordings(artist=artist, recording=title)
+    except musicbrainzngs.WebServiceError as exc:
+        print(f"Error fetching metadata from MusicBrainz: {exc}")
+        return []
+
+    if not result.get("recording-list"):
+        return []
+
+    release_cache = {}
+    return [
+        _process_recording(rec, artist, release_cache)
+        for rec in result["recording-list"]
+    ]
+
+
+# =============================================================================
+# AUDIO FILE HANDLING FUNCTIONS
+# =============================================================================
+
+
+def _write_mp3_tags(audio: MP3, metadata: dict):
+    """Write MP3 specific tags."""
+    if audio.tags is None:
+        audio.tags = ID3()
+
+    if metadata.get("artist"):
+        audio.tags["TPE1"] = TPE1(encoding=3, text=[metadata["artist"]])
+
+    if metadata.get("title"):
+        audio.tags["TIT2"] = TIT2(encoding=3, text=[metadata["title"]])
+
+    if metadata.get("album"):
+        audio.tags["TALB"] = TALB(encoding=3, text=[metadata["album"]])
+
+    if metadata.get("year"):
+        audio.tags["TDRC"] = TDRC(encoding=3, text=[metadata["year"][:4]])
+
+    if metadata.get("track"):
+        audio.tags["TRCK"] = TRCK(encoding=3, text=[metadata["track"]])
+
+    if metadata.get("genre"):
+        audio.tags["TCON"] = TCON(encoding=3, text=[metadata["genre"]])
+
+
+def _write_ogg_opus_tags(audio: OggOpus, metadata: dict):
+    """Write OggOpus specific tags."""
+    if audio.tags is None:
+        audio.add_tags()
+
+    if metadata.get("artist"):
+        audio.tags["artist"] = metadata["artist"]
+
+    if metadata.get("title"):
+        audio.tags["title"] = metadata["title"]
+
+    if metadata.get("album"):
+        audio.tags["album"] = metadata["album"]
+
+    if metadata.get("year"):
+        audio.tags["date"] = metadata["year"]
+
+    if metadata.get("track"):
+        audio.tags["tracknumber"] = metadata["track"]
+
+    if metadata.get("genre"):
+        audio.tags["genre"] = metadata["genre"]
+
+
+def _write_mp3_cover(audio: MP3, cover_data: bytes):
+    """Write MP3 cover art."""
+    if audio.tags is None:
+        audio.tags = ID3()
+
+    audio.tags.delall("APIC")
+    audio.tags.add(
+        APIC(
+            encoding=3,
+            mime="image/jpeg",
+            type=3,
+            desc="Cover",
+            data=cover_data,
+        )
+    )
+
+
+def _write_ogg_opus_cover(audio: OggOpus, cover_data: bytes):
+    """Write OggOpus cover art."""
+    if audio.tags is None:
+        audio.add_tags()
+
+    picture = Picture()
+    picture.data = cover_data
+    picture.type = 3
+    picture.mime = "image/jpeg"
+
+    audio.tags["metadata_block_picture"] = [
+        base64.b64encode(picture.write()).decode("ascii")
+    ]
+
+
+def write_tags(song_file: str, metadata: dict, cover_data: bytes | None = None):
+    """Write tags and optionally cover art to an audio file."""
+    try:
+        audio = get_audio_file(song_file)
+    except MutagenError as e:
+        print(f"Error loading {song_file}: {e}")
+        raise
+
+    # Write basic tags
+    if isinstance(audio, MP3):
+        _write_mp3_tags(audio, metadata)
+        if cover_data:
+            _write_mp3_cover(audio, cover_data)
+    elif isinstance(audio, OggOpus):
+        _write_ogg_opus_tags(audio, metadata)
+        if cover_data:
+            _write_ogg_opus_cover(audio, cover_data)
+
+    audio.save()
+
 
 # =============================================================================
 # PUBLIC MUSIC APIs
@@ -186,6 +444,21 @@ class PublicMusicAPIs:
 
 
 # =============================================================================
+# CUSTOM WIDGETS
+# =============================================================================
+
+
+class ClickableLabel(QLabel):
+    """QLabel that emits a clicked signal when pressed."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event: QMouseEvent):
+        self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+# =============================================================================
 # THREADING CLASSES
 # =============================================================================
 
@@ -261,260 +534,6 @@ class MetadataFetcherThread(QThread):
             )
 
         self.finished.emit(metadata_options)
-
-
-# =============================================================================
-# CUSTOM WIDGETS
-# =============================================================================
-
-
-class ClickableLabel(QLabel):
-    """QLabel that emits a clicked signal when pressed."""
-
-    clicked = Signal()
-
-    def mousePressEvent(self, event: QMouseEvent):
-        self.clicked.emit()
-        super().mousePressEvent(event)
-
-
-# =============================================================================
-# MUSICBRAINZ API FUNCTIONS
-# =============================================================================
-
-
-def _get_track_number(release: dict, recording_id: str) -> str:
-    """Find the track number for a recording within a release."""
-    if "medium-list" in release:
-        for medium in release["medium-list"]:
-            if "track-list" in medium:
-                for track in medium["track-list"]:
-                    if track.get("recording", {}).get("id") == recording_id:
-                        return track.get("number", "")
-    return ""
-
-
-def _get_genre(recording: dict) -> str:
-    """Extract genre from a recording's tag list."""
-    if "tag-list" in recording and recording["tag-list"]:
-        return recording["tag-list"][0]["name"]
-    return ""
-
-
-def _choose_release(release_list: list) -> dict:
-    """Choose the best release from a list of releases."""
-    releases_with_date = [r for r in release_list if "date" in r]
-    return releases_with_date[0] if releases_with_date else release_list[0]
-
-
-def _fetch_and_cache_release_details(
-    release_id: str, release_cache: dict
-) -> dict | None:
-    """Fetch release details from MusicBrainz and cache them."""
-    if release_id in release_cache:
-        return release_cache[release_id]
-
-    try:
-        release_details = musicbrainzngs.get_release_by_id(
-            release_id, includes=["recordings"]
-        )
-        release_cache[release_id] = release_details
-        return release_details
-    except musicbrainzngs.WebServiceError as exc:
-        print(f"Error fetching release details from MusicBrainz: {exc}")
-        return None
-
-
-def _process_recording(recording: dict, artist: str, release_cache: dict) -> dict:
-    """Process a single recording from MusicBrainz search result."""
-    album, year, track = "", "", ""
-
-    # Get release info
-    if "release-list" in recording and recording["release-list"]:
-        chosen_release = _choose_release(recording["release-list"])
-        album = chosen_release.get("title", "")
-
-        date_str = chosen_release.get("date", "")
-        if len(date_str) >= 4 and date_str[:4].isdigit():
-            year = date_str[:4]
-
-        release_id = chosen_release.get("id")
-        if release_id:
-            release_details = _fetch_and_cache_release_details(
-                release_id, release_cache
-            )
-            if release_details and "release" in release_details:
-                track = _get_track_number(release_details["release"], recording["id"])
-
-    # Get genre
-    genre = _get_genre(recording)
-
-    # Store release_id for cover art
-    release_id = ""
-    if "release-list" in recording and recording["release-list"]:
-        chosen_release = _choose_release(recording["release-list"])
-        release_id = chosen_release.get("id", "")
-
-    return {
-        "title": recording.get("title", ""),
-        "artist": artist,
-        "album": album,
-        "year": year,
-        "track": track,
-        "genre": genre,
-        "source": "MusicBrainz",
-        "release_id": release_id,
-        "cover_url": None,
-    }
-
-
-def fetch_song_metadata(artist: str, title: str) -> list[dict]:
-    """Fetch song metadata from MusicBrainz based on artist and title."""
-    try:
-        result = musicbrainzngs.search_recordings(artist=artist, recording=title)
-    except musicbrainzngs.WebServiceError as exc:
-        print(f"Error fetching metadata from MusicBrainz: {exc}")
-        return []
-
-    if not result.get("recording-list"):
-        return []
-
-    release_cache = {}
-    return [
-        _process_recording(rec, artist, release_cache)
-        for rec in result["recording-list"]
-    ]
-
-
-# =============================================================================
-# AUDIO FILE HANDLING FUNCTIONS
-# =============================================================================
-
-
-def get_audio_file(file_path: str) -> MP3 | OggOpus:
-    """Factory function to return the correct mutagen audio object."""
-    _, ext = os.path.splitext(file_path)
-
-    if ext.lower() == ".mp3":
-        return MP3(file_path)
-    elif ext.lower() == ".opus":
-        return OggOpus(file_path)
-    else:
-        raise MutagenError(f"Unsupported file type: {ext}")
-
-
-def write_tags(song_file: str, metadata: dict, cover_data: bytes | None = None):
-    """Write tags and optionally cover art to an audio file."""
-    try:
-        audio = get_audio_file(song_file)
-    except MutagenError as e:
-        print(f"Error loading {song_file}: {e}")
-        raise
-
-    # Write basic tags
-    if isinstance(audio, MP3):
-        _write_mp3_tags(audio, metadata)
-        if cover_data:
-            _write_mp3_cover(audio, cover_data)
-    elif isinstance(audio, OggOpus):
-        _write_ogg_opus_tags(audio, metadata)
-        if cover_data:
-            _write_ogg_opus_cover(audio, cover_data)
-
-    audio.save()
-
-
-def _write_mp3_tags(audio: MP3, metadata: dict):
-    """Write MP3 specific tags."""
-    if audio.tags is None:
-        audio.tags = ID3()
-
-    if metadata.get("artist"):
-        audio.tags["TPE1"] = TPE1(encoding=3, text=[metadata["artist"]])
-
-    if metadata.get("title"):
-        audio.tags["TIT2"] = TIT2(encoding=3, text=[metadata["title"]])
-
-    if metadata.get("album"):
-        audio.tags["TALB"] = TALB(encoding=3, text=[metadata["album"]])
-
-    if metadata.get("year"):
-        audio.tags["TDRC"] = TDRC(encoding=3, text=[metadata["year"][:4]])
-
-    if metadata.get("track"):
-        audio.tags["TRCK"] = TRCK(encoding=3, text=[metadata["track"]])
-
-    if metadata.get("genre"):
-        audio.tags["TCON"] = TCON(encoding=3, text=[metadata["genre"]])
-
-
-def _write_ogg_opus_tags(audio: OggOpus, metadata: dict):
-    """Write OggOpus specific tags."""
-    if audio.tags is None:
-        audio.add_tags()
-
-    if metadata.get("artist"):
-        audio.tags["artist"] = metadata["artist"]
-
-    if metadata.get("title"):
-        audio.tags["title"] = metadata["title"]
-
-    if metadata.get("album"):
-        audio.tags["album"] = metadata["album"]
-
-    if metadata.get("year"):
-        audio.tags["date"] = metadata["year"]
-
-    if metadata.get("track"):
-        audio.tags["tracknumber"] = metadata["track"]
-
-    if metadata.get("genre"):
-        audio.tags["genre"] = metadata["genre"]
-
-
-def _write_mp3_cover(audio: MP3, cover_data: bytes):
-    """Write MP3 cover art."""
-    if audio.tags is None:
-        audio.tags = ID3()
-
-    audio.tags.delall("APIC")
-    audio.tags.add(
-        APIC(
-            encoding=3,
-            mime="image/jpeg",
-            type=3,
-            desc="Cover",
-            data=cover_data,
-        )
-    )
-
-
-def _write_ogg_opus_cover(audio: OggOpus, cover_data: bytes):
-    """Write OggOpus cover art."""
-    if audio.tags is None:
-        audio.add_tags()
-
-    picture = Picture()
-    picture.data = cover_data
-    picture.type = 3
-    picture.mime = "image/jpeg"
-
-    audio.tags["metadata_block_picture"] = [
-        base64.b64encode(picture.write()).decode("ascii")
-    ]
-
-
-def parse_artist_title_from_filename(filename: str) -> tuple[str | None, str | None]:
-    """Parse artist and title from a filename (Artist - Title.ext)."""
-    base_name = os.path.splitext(os.path.basename(filename))[0]
-
-    if " - " in base_name:
-        parts = base_name.split(" - ", 1)
-        artist = parts[0].strip()
-        title = parts[1].strip()
-        return artist, title
-
-    return None, None
 
 
 # =============================================================================
@@ -726,7 +745,7 @@ class AutoSongTaggerUI(QWidget):
         self.results_list.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
-        self.results_list.itemSelectionChanged.connect(self.enable_apply_button)
+        self.results_list.itemSelectionChanged.connect(self.on_selection_changed)
 
         layout.addWidget(self.results_label)
         layout.addWidget(self.results_list)
@@ -751,7 +770,7 @@ class AutoSongTaggerUI(QWidget):
         )
         self.disc_cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.disc_cover_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.disc_cover_label.clicked.connect(self._on_disc_cover_clicked)
+        self.disc_cover_label.clicked.connect(self.on_disc_cover_clicked)
 
         tags_and_cover_layout.addLayout(tags_layout)
         tags_and_cover_layout.addWidget(self.disc_cover_label)
@@ -782,7 +801,7 @@ class AutoSongTaggerUI(QWidget):
             label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
 
             input_field = QLineEdit()
-            input_field.textChanged.connect(self._on_current_tag_text_changed)
+            input_field.textChanged.connect(self.on_current_tag_text_changed)
 
             setattr(self, input_name, input_field)
 
@@ -909,7 +928,7 @@ class AutoSongTaggerUI(QWidget):
 
         self._populate_tag_fields(tags)
         self._original_tags = tags
-        self._on_current_tag_text_changed()
+        self.on_current_tag_text_changed()
 
     def _clear_tag_fields(self, message: str | None = None):
         """Clear the tag display fields."""
@@ -982,7 +1001,7 @@ class AutoSongTaggerUI(QWidget):
 
         genre_value = get_tag("genre")
         if genre_value != "N/A":
-            genre_value = genre_value.title()
+            genre_value = _process_genre_string(genre_value)
 
         return {
             "artist": get_tag("artist"),
@@ -1017,14 +1036,6 @@ class AutoSongTaggerUI(QWidget):
     def _get_input_text_value(self, input_widget: Optional[QLineEdit]) -> str:
         """Safely get text from a QLineEdit widget, returning an empty string if None."""
         return input_widget.text() if input_widget else ""
-
-    def _process_genre_string(self, genre_str: str) -> str:
-        """Extracts the first genre and converts it to title case."""
-        if not genre_str:
-            return ""
-        # Split by common delimiters and take the first part
-        first_genre = genre_str.split(',')[0].split(';')[0].strip()
-        return first_genre.title()
 
     # =========================================================================
     # COVER ART HANDLING
@@ -1087,7 +1098,7 @@ class AutoSongTaggerUI(QWidget):
             self.disc_cover_label.clear()
             self.disc_cover_label.setText("No cover found.")
 
-    def _on_disc_cover_clicked(self):
+    def on_disc_cover_clicked(self):
         """Handle click event on disc cover to select new cover image."""
         file_dialog = QFileDialog(self)
         file_dialog.setNameFilter("Image files (*.png *.jpg *.jpeg *.bmp *.gif *.webp)")
@@ -1135,11 +1146,11 @@ class AutoSongTaggerUI(QWidget):
         self.progress_bar.show()
 
         self.metadata_fetcher_thread = MetadataFetcherThread(artist, title)
-        self.metadata_fetcher_thread.finished.connect(self._on_metadata_fetched)
-        self.metadata_fetcher_thread.progress_signal.connect(self._on_progress_update)
+        self.metadata_fetcher_thread.finished.connect(self.on_metadata_fetched)
+        self.metadata_fetcher_thread.progress_signal.connect(self.on_progress_update)
         self.metadata_fetcher_thread.start()
 
-    def _on_metadata_fetched(self, metadata_options: list[dict]):
+    def on_metadata_fetched(self, metadata_options: list[dict]):
         """Handle the result of metadata fetching thread."""
         self.progress_bar.hide()
 
@@ -1164,7 +1175,7 @@ class AutoSongTaggerUI(QWidget):
         for meta in self.metadata_options:
             # Process genre before displaying
             if "genre" in meta:
-                meta["genre"] = self._process_genre_string(meta["genre"])
+                meta["genre"] = _process_genre_string(meta["genre"])
 
             row_position = self.results_list.rowCount()
             self.results_list.insertRow(row_position)
@@ -1177,7 +1188,7 @@ class AutoSongTaggerUI(QWidget):
 
         self.results_list.resizeColumnsToContents()
 
-    def enable_apply_button(self):
+    def on_selection_changed(self):
         """Enable apply button when a row is selected."""
         selected_indexes = self.results_list.selectedIndexes()
 
@@ -1205,7 +1216,7 @@ class AutoSongTaggerUI(QWidget):
                 if cover_url:
                     self._download_and_display_cover(cover_url)
 
-            self._on_current_tag_text_changed()
+            self.on_current_tag_text_changed()
 
     def _download_and_display_cover(self, cover_url: str):
         """Download and display cover art from URL."""
@@ -1240,11 +1251,11 @@ class AutoSongTaggerUI(QWidget):
         self.tag_writer_thread = TagWriterThread(
             self.song_file_path, chosen_metadata, self._new_cover_data
         )
-        self.tag_writer_thread.finished.connect(self._on_tags_written)
-        self.tag_writer_thread.progress_signal.connect(self._on_progress_update)
+        self.tag_writer_thread.finished.connect(self.on_tags_written)
+        self.tag_writer_thread.progress_signal.connect(self.on_progress_update)
         self.tag_writer_thread.start()
 
-    def _on_tags_written(self, success: bool, message: str):
+    def on_tags_written(self, success: bool, message: str):
         """Handle the result of tag writing thread."""
         if success:
             QMessageBox.information(self, "Tags Applied", message)
@@ -1257,13 +1268,13 @@ class AutoSongTaggerUI(QWidget):
         self.apply_button.setEnabled(True)
         self.progress_bar.hide()
 
-    def _on_progress_update(self, message: str):
+    def on_progress_update(self, message: str):
         """Update progress bar with messages."""
         self.progress_bar.show()
         self.progress_bar.setFormat(message)
         self.progress_bar.setRange(0, 0)
 
-    def _on_current_tag_text_changed(self):
+    def on_current_tag_text_changed(self):
         """Enable apply button if changes detected in current tag fields."""
         if not self.song_file_path:
             self.apply_button.setEnabled(False)
