@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-
 """
-A GUI application for automatically tagging audio files using MusicBrainz
-metadata.
+A GUI application for automatically tagging audio files using MusicBrainz metadata.
+
 Author: Gino Bogo
 
-This script provides a user interface to:
-- Select an audio file (MP3 or Opus).
-- Parse artist and title from the filename.
-- Fetch metadata (artist, title, album, year, genre) from MusicBrainz.
-- Display current tags of the selected file.
-- Allow users to choose from multiple metadata options.
-- Apply selected metadata as tags to the audio file.
+Features:
+- Select audio files (MP3 or Opus)
+- Parse artist and title from filename
+- Fetch metadata from MusicBrainz
+- Display current file tags
+- Choose from multiple metadata options
+- Apply selected metadata as tags
+- Handle cover art
 """
 
 import base64
@@ -23,9 +23,8 @@ import musicbrainzngs
 
 from mutagen._util import MutagenError
 from mutagen.flac import Picture
-
 from mutagen.id3 import ID3
-from mutagen.id3._frames import TALB, TDRC, TPE1, TIT2, TCON, APIC, TRCK  # noqa: F401
+from mutagen.id3._frames import TALB, TDRC, TPE1, TIT2, TCON, APIC, TRCK
 from mutagen.mp3 import MP3
 from mutagen.oggopus import OggOpus
 
@@ -48,24 +47,27 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-# Define constants
+# =============================================================================
+# CONSTANTS
+# =============================================================================
+
 RIGHT_VCENTER_ALIGNMENT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 NO_FILE_SELECTED_TEXT = "No file selected."
 CONFIG_FILE_NAME = "auto_song_tagger.cfg"
 
-# Setup MusicBrainz client
-musicbrainzngs.set_useragent(
-    str("AutoSongTagger"), str("0.1"), str("your-email@example.com")
-)
+# MusicBrainz client setup
+musicbrainzngs.set_useragent("AutoSongTagger", "0.1", "your-email@example.com")
 
-################################################################################
+# =============================================================================
+# THREADING CLASSES
+# =============================================================================
 
 
 class TagWriterThread(QThread):
-    """A QThread subclass to perform tag writing in a separate thread."""
+    """QThread for performing tag writing in a separate thread."""
 
     finished = Signal(bool, str)  # Signal(success, message)
-    progress_signal = Signal(str)  # Signal to emit progress messages
+    progress_signal = Signal(str)  # Signal for progress messages
 
     def __init__(
         self,
@@ -80,6 +82,7 @@ class TagWriterThread(QThread):
         self.cover_data = cover_data
 
     def run(self):
+        """Main thread execution method."""
         try:
             self.progress_signal.emit("Starting tag update...")
 
@@ -93,82 +96,71 @@ class TagWriterThread(QThread):
             self.finished.emit(False, f"Failed to apply tags: {e}")
 
 
-################################################################################
+# =============================================================================
+# CUSTOM WIDGETS
+# =============================================================================
 
 
 class ClickableLabel(QLabel):
-    """A QLabel subclass that emits a clicked signal when pressed."""
+    """QLabel that emits a clicked signal when pressed."""
 
     clicked = Signal()
 
     def mousePressEvent(self, event: QMouseEvent):
-        """Handles mouse press events and emits the clicked signal."""
+        """Handle mouse press events and emit clicked signal."""
         self.clicked.emit()
         super().mousePressEvent(event)
 
 
-################################################################################
+# =============================================================================
+# MUSICBRAINZ API FUNCTIONS
+# =============================================================================
 
 
-def _get_track_number(release: dict, recording_id: str):
-    """Finds the track number for a recording within a release."""
+def _get_track_number(release: dict, recording_id: str) -> str:
+    """Find the track number for a recording within a release."""
     if "medium-list" in release:
         for medium in release["medium-list"]:
             if "track-list" in medium:
-                for t in medium["track-list"]:
-                    if t.get("recording", {}).get("id") == recording_id:
-                        return t.get("number", "")
+                for track in medium["track-list"]:
+                    if track.get("recording", {}).get("id") == recording_id:
+                        return track.get("number", "")
     return ""
 
 
-################################################################################
-
-
-def _get_genre(recording: dict):
-    """Extracts genre from a recording's tag list."""
+def _get_genre(recording: dict) -> str:
+    """Extract genre from a recording's tag list."""
     if "tag-list" in recording and recording["tag-list"]:
         return ", ".join([tag["name"] for tag in recording["tag-list"]])
     return ""
 
 
-################################################################################
-
-
 def _choose_release(release_list: list) -> dict:
-    """Chooses the best release from a list of releases."""
+    """Choose the best release from a list of releases."""
     releases_with_date = [r for r in release_list if "date" in r]
     return releases_with_date[0] if releases_with_date else release_list[0]
-
-
-################################################################################
 
 
 def _fetch_and_cache_release_details(
     release_id: str, release_cache: dict
 ) -> dict | None:
-    """Fetches release details from MusicBrainz and caches them."""
-
+    """Fetch release details from MusicBrainz and cache them."""
     if release_id in release_cache:
         return release_cache[release_id]
+
     try:
         release_details = musicbrainzngs.get_release_by_id(
             release_id, includes=["recordings"]
         )
         release_cache[release_id] = release_details
-
         return release_details
-
     except musicbrainzngs.WebServiceError as exc:
         print(f"Error fetching release details from MusicBrainz: {exc}")
-
         return None
 
 
-################################################################################
-
-
 def _get_release_info(recording: dict, release_cache: dict) -> tuple[str, str, str]:
-    """Extracts album, year, and track from a recording's release list."""
+    """Extract album, year, and track from a recording's release list."""
     album, year, track = "", "", ""
 
     if not ("release-list" in recording and recording["release-list"]):
@@ -189,11 +181,8 @@ def _get_release_info(recording: dict, release_cache: dict) -> tuple[str, str, s
     return album, year, track
 
 
-################################################################################
-
-
-def _process_recording(recording: dict, artist: str, release_cache: dict):
-    """Processes a single recording from the MusicBrainz search result."""
+def _process_recording(recording: dict, artist: str, release_cache: dict) -> dict:
+    """Process a single recording from MusicBrainz search result."""
     album, year, track = _get_release_info(recording, release_cache)
     genre = _get_genre(recording)
 
@@ -207,18 +196,16 @@ def _process_recording(recording: dict, artist: str, release_cache: dict):
     }
 
 
-################################################################################
-
-
-def fetch_song_metadata(artist: str, title: str):
-    """Fetches song metadata from MusicBrainz based on artist and title.
+def fetch_song_metadata(artist: str, title: str) -> list[dict]:
+    """
+    Fetch song metadata from MusicBrainz based on artist and title.
 
     Args:
-        artist (str): The artist's name.
-        title (str): The song title.
+        artist: The artist's name
+        title: The song title
 
     Returns:
-        list: A list of dictionaries, each containing metadata for a recording.
+        List of dictionaries containing metadata for each recording
     """
     try:
         result = musicbrainzngs.search_recordings(artist=artist, recording=title)
@@ -229,19 +216,31 @@ def fetch_song_metadata(artist: str, title: str):
     if not result.get("recording-list"):
         return []
 
-    release_cache: dict = {}
+    release_cache = {}
     return [
         _process_recording(rec, artist, release_cache)
         for rec in result["recording-list"]
     ]
 
 
-################################################################################
+# =============================================================================
+# AUDIO FILE HANDLING FUNCTIONS
+# =============================================================================
 
 
 def get_audio_file(file_path: str) -> MP3 | OggOpus:
-    """Factory function to return the correct mutagen audio object based on file
-    extension."""
+    """
+    Factory function to return the correct mutagen audio object based on file extension.
+
+    Args:
+        file_path: Path to the audio file
+
+    Returns:
+        MP3 or OggOpus audio object
+
+    Raises:
+        MutagenError: If file type is unsupported
+    """
     _, ext = os.path.splitext(file_path)
 
     if ext.lower() == ".mp3":
@@ -252,11 +251,8 @@ def get_audio_file(file_path: str) -> MP3 | OggOpus:
         raise MutagenError(f"Unsupported file type: {ext}")
 
 
-################################################################################
-
-
 def _write_mp3_tags(audio: MP3, metadata: dict[str, str]):
-    """Helper to write MP3 specific tags."""
+    """Write MP3 specific tags."""
     if audio.tags is None:
         audio.tags = ID3()
 
@@ -279,11 +275,8 @@ def _write_mp3_tags(audio: MP3, metadata: dict[str, str]):
         audio.tags["TCON"] = TCON(encoding=3, text=[metadata["genre"]])
 
 
-################################################################################
-
-
 def _write_ogg_opus_tags(audio: OggOpus, metadata: dict[str, str]):
-    """Helper to write OggOpus specific tags."""
+    """Write OggOpus specific tags."""
     if audio.tags is None:
         audio.add_tags()
 
@@ -306,11 +299,8 @@ def _write_ogg_opus_tags(audio: OggOpus, metadata: dict[str, str]):
         audio.tags["genre"] = metadata["genre"]
 
 
-################################################################################
-
-
 def _write_mp3_cover(audio: MP3, cover_data: bytes):
-    """Helper to write MP3 cover art."""
+    """Write MP3 cover art."""
     if audio.tags is None:
         audio.tags = ID3()
 
@@ -321,7 +311,7 @@ def _write_mp3_cover(audio: MP3, cover_data: bytes):
     audio.tags.add(
         APIC(
             encoding=3,  # UTF-8
-            mime="image/jpeg",  # Assuming JPEG, but could be dynamic
+            mime="image/jpeg",  # Assuming JPEG
             type=3,  # Front cover
             desc="Cover",
             data=cover_data,
@@ -329,11 +319,8 @@ def _write_mp3_cover(audio: MP3, cover_data: bytes):
     )
 
 
-################################################################################
-
-
 def _write_ogg_opus_cover(audio: OggOpus, cover_data: bytes):
-    """Helper to write OggOpus cover art."""
+    """Write OggOpus cover art."""
     if audio.tags is None:
         audio.add_tags()
 
@@ -341,7 +328,7 @@ def _write_ogg_opus_cover(audio: OggOpus, cover_data: bytes):
     picture = Picture()
     picture.data = cover_data
     picture.type = 3  # Front cover
-    picture.mime = "image/jpeg"  # Assuming JPEG, but could be dynamic
+    picture.mime = "image/jpeg"  # Assuming JPEG
 
     # Encode the picture to base64 and add to tags
     audio.tags["metadata_block_picture"] = [
@@ -349,26 +336,27 @@ def _write_ogg_opus_cover(audio: OggOpus, cover_data: bytes):
     ]
 
 
-################################################################################
-
-
 def write_tags(
     song_file: str, metadata: dict[str, str], cover_data: bytes | None = None
 ):
-    """Writes tags and optionally cover art to an audio file.
+    """
+    Write tags and optionally cover art to an audio file.
 
     Args:
-        song_file (str): The absolute path to the audio file.
-        metadata (dict): A dictionary containing the metadata to write.
-        cover_data (bytes, optional): The byte data of the cover image.
-                                      Defaults to None.
+        song_file: Absolute path to the audio file
+        metadata: Dictionary containing metadata to write
+        cover_data: Byte data of the cover image (optional)
+
+    Raises:
+        MutagenError: If file cannot be loaded or written
     """
     try:
         audio = get_audio_file(song_file)
     except MutagenError as e:
         print(f"Error loading {song_file}: {e}")
-        raise  # Re-raise the exception to propagate the error
+        raise
 
+    # Map audio types to their respective writer functions
     tag_writers = {
         MP3: _write_mp3_tags,
         OggOpus: _write_ogg_opus_tags,
@@ -382,6 +370,7 @@ def write_tags(
         print(f"Unsupported audio type for writing tags: {type(audio)}")
         return
 
+    # Handle cover art if provided
     if cover_data:
         if isinstance(audio, MP3):
             _write_mp3_cover(audio, cover_data)
@@ -393,19 +382,17 @@ def write_tags(
     audio.save()
 
 
-################################################################################
+def parse_artist_title_from_filename(filename: str) -> tuple[str | None, str | None]:
+    """
+    Parse artist and title from a filename.
 
-
-def parse_artist_title_from_filename(filename: str):
-    """Attempts to parse artist and title from a filename.
-
-    Assumes a format like 'Artist - Title.mp3'.
+    Assumes format: 'Artist - Title.mp3'
 
     Args:
-        filename (str): The full path or just the filename of the audio file.
+        filename: Full path or just the filename
 
     Returns:
-        tuple: A tuple (artist, title) or (None, None) if parsing fails.
+        Tuple of (artist, title) or (None, None) if parsing fails
     """
     base_name = os.path.splitext(os.path.basename(filename))[0]
 
@@ -418,18 +405,54 @@ def parse_artist_title_from_filename(filename: str):
     return None, None
 
 
-################################################################################
+# =============================================================================
+# MAIN APPLICATION CLASS
+# =============================================================================
 
 
 class AutoSongTaggerUI(QWidget):
+    """Main application window for Auto Song Tagger."""
+
+    def __init__(self):
+        """Initialize the AutoSongTaggerUI application window."""
+        super().__init__()
+        self.setWindowTitle("Auto Song Tagger")
+
+        # Initialize instance variables
+        self._new_cover_data = None
+        self._original_tags = {}
+        self._column_widths_from_settings = []
+        self.song_file_path = ""
+        self.metadata_options = []
+        self.tag_writer_thread = None
+
+        # Declare UI elements for static analysis
+        self.current_artist_input: QLineEdit
+        self.current_title_input: QLineEdit
+        self.current_album_input: QLineEdit
+        self.current_year_input: QLineEdit
+        self.current_track_input: QLineEdit
+        self.current_genre_input: QLineEdit
+
+        # Setup UI
+        self.load_settings()
+        self.init_ui()
+        self.apply_column_widths_from_settings()
+        self._apply_styles()
+
+    # =========================================================================
+    # SETTINGS MANAGEMENT
+    # =========================================================================
+
     def load_settings(self):
-        """Loads window size and position from auto_song_tagger.cfg."""
+        """Load window size, position, and column widths from config file."""
         config = configparser.ConfigParser()
         config_file = CONFIG_FILE_NAME
 
         if os.path.exists(config_file):
             config.read(config_file)
 
+            # Load window geometry
             if "MainWindow" in config:
                 try:
                     x = int(config["MainWindow"]["x"])
@@ -440,6 +463,7 @@ class AutoSongTaggerUI(QWidget):
                 except ValueError:
                     print("Error reading window geometry from config. Using defaults.")
 
+            # Load column widths
             if "ColumnWidths" in config:
                 try:
                     widths_str = config["ColumnWidths"]["widths"]
@@ -450,91 +474,151 @@ class AutoSongTaggerUI(QWidget):
             else:
                 self._column_widths_from_settings = []
         else:
-            # Default size and position if no config or error
+            # Default size and position
             self.setGeometry(100, 100, 800, 800)
             self._column_widths_from_settings = []
 
-    ############################################################################
-
     def apply_column_widths_from_settings(self):
-        """Applies column widths from auto_song_tagger.cfg."""
+        """Apply column widths from settings to the results table."""
         if getattr(self, "_column_widths_from_settings", []):
             header = self.results_list.horizontalHeader()
-
-            for i, w in enumerate(self._column_widths_from_settings):
+            for i, width in enumerate(self._column_widths_from_settings):
                 if i < header.count():
-                    header.resizeSection(i, w)
+                    header.resizeSection(i, width)
 
-    def __init__(self):
-        """Initializes the AutoSongTaggerUI application window."""
-        super().__init__()
-        self.setWindowTitle("Auto Song Tagger")
-        self.load_settings()  # Load settings before initializing UI
-        self.init_ui()
-        self.apply_column_widths_from_settings()  # Apply column widths after UI is initialized
-        self._apply_styles()
-        self._new_cover_data = None
+    def save_settings(self):
+        """Save current window size, position, and column widths to config file."""
+        config = configparser.ConfigParser()
+
+        # Save window geometry
+        config["MainWindow"] = {
+            "x": str(self.x()),
+            "y": str(self.y()),
+            "width": str(self.width()),
+            "height": str(self.height()),
+        }
+
+        # Save column widths
+        header = self.results_list.horizontalHeader()
+        column_widths = [str(header.sectionSize(i)) for i in range(header.count())]
+        config["ColumnWidths"] = {"widths": ",".join(column_widths)}
+
+        with open(CONFIG_FILE_NAME, "w") as config_file:
+            config.write(config_file)
+
+    def closeEvent(self, event: QCloseEvent):
+        """Override close event to save window settings."""
+        self.save_settings()
+        event.accept()
+
+    # =========================================================================
+    # UI INITIALIZATION AND STYLING
+    # =========================================================================
 
     def init_ui(self):
-        """Initializes the user interface components and layout."""
+        """Initialize the user interface components and layout."""
         main_layout = QVBoxLayout()
 
-        # MP3 File Selection
-        file_layout = QHBoxLayout()
+        # File Selection Section
+        main_layout.addLayout(self._create_file_selection_section())
+
+        # Artist/Title Input Section
+        main_layout.addLayout(self._create_input_section())
+
+        # Action Buttons Section
+        main_layout.addLayout(self._create_button_section())
+
+        # Metadata Results Section
+        main_layout.addLayout(self._create_results_section())
+
+        # Current Tags Section
+        main_layout.addLayout(self._create_current_tags_section())
+
+        # Progress Bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.hide()
+        main_layout.addWidget(self.progress_bar)
+
+        self.setLayout(main_layout)
+
+    def _create_file_selection_section(self) -> QHBoxLayout:
+        """Create the file selection section."""
+        layout = QHBoxLayout()
+
         self.file_label = QLabel("Audio File:")
         self.file_label.setFixedWidth(80)
         self.file_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
+
         self.file_path_input = QLineEdit()
         self.file_path_input.setReadOnly(True)
+
         self.browse_button = QPushButton("Browse")
         self.browse_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.browse_button.setFixedWidth(100)
         self.browse_button.clicked.connect(self.browse_song_file)
-        file_layout.addWidget(self.file_label)
-        file_layout.addWidget(self.file_path_input)
-        file_layout.addWidget(self.browse_button)
-        main_layout.addLayout(file_layout)
 
-        # Artist and Title Input
-        input_layout = QHBoxLayout()
+        layout.addWidget(self.file_label)
+        layout.addWidget(self.file_path_input)
+        layout.addWidget(self.browse_button)
+
+        return layout
+
+    def _create_input_section(self) -> QHBoxLayout:
+        """Create the artist/title input section."""
+        layout = QHBoxLayout()
+
+        # Artist input
         self.artist_label = QLabel("Artist:")
         self.artist_label.setFixedWidth(80)
         self.artist_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
         self.artist_input = QLineEdit()
+
+        # Title input
         self.title_label = QLabel("Title:")
         self.title_label.setFixedWidth(80)
         self.title_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
         self.title_input = QLineEdit()
-        input_layout.addWidget(self.artist_label)
-        input_layout.addWidget(self.artist_input)
-        input_layout.addWidget(self.title_label)
-        input_layout.addWidget(self.title_input)
-        main_layout.addLayout(input_layout)
 
-        # Action Buttons
-        button_layout = QHBoxLayout()
+        layout.addWidget(self.artist_label)
+        layout.addWidget(self.artist_input)
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.title_input)
+
+        return layout
+
+    def _create_button_section(self) -> QHBoxLayout:
+        """Create the action buttons section."""
+        layout = QHBoxLayout()
+
         self.fetch_button = QPushButton("Fetch Metadata")
         self.fetch_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fetch_button.clicked.connect(self.fetch_metadata)
+
         self.apply_button = QPushButton("Apply Tags")
         self.apply_button.setObjectName("applyButton")
         self.apply_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.apply_button.clicked.connect(self.apply_tags)
         self.apply_button.setEnabled(False)  # Disable until metadata is fetched
-        button_layout.addWidget(self.fetch_button)
-        button_layout.addWidget(self.apply_button)
-        main_layout.addLayout(button_layout)
 
-        # Metadata Results
+        layout.addWidget(self.fetch_button)
+        layout.addWidget(self.apply_button)
+
+        return layout
+
+    def _create_results_section(self) -> QVBoxLayout:
+        """Create the metadata results section."""
+        layout = QVBoxLayout()
+
         self.results_label = QLabel("Metadata Options:")
         self.results_list = QTableWidget()
         self.results_list.setColumnCount(6)  # Artist, Title, Album, Year, Track, Genre
         self.results_list.setHorizontalHeaderLabels(
             ["Artist", "Title", "Album", "Year", "Track", "Genre"]
         )
+
         header = self.results_list.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-
         self.results_list.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
@@ -542,83 +626,25 @@ class AutoSongTaggerUI(QWidget):
             QAbstractItemView.SelectionMode.SingleSelection
         )
         self.results_list.itemSelectionChanged.connect(self.enable_apply_button)
-        main_layout.addWidget(self.results_label)
-        main_layout.addWidget(self.results_list)
 
-        # Current Tags Display
+        layout.addWidget(self.results_label)
+        layout.addWidget(self.results_list)
+
+        return layout
+
+    def _create_current_tags_section(self) -> QVBoxLayout:
+        """Create the current tags display section."""
+        layout = QVBoxLayout()
+
         self.current_tags_label = QLabel("Current Tags:")
-        current_tags_input_layout = QVBoxLayout()
+
+        # Main container for tags and cover
         tags_and_cover_layout = QHBoxLayout()
 
-        # Artist
-        artist_display_layout = QHBoxLayout()
-        self.current_artist_label = QLabel("Artist:")
-        self.current_artist_label.setFixedWidth(60)  # Set a fixed width
-        self.current_artist_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
-        self.current_artist_input = QLineEdit()
-        self.current_artist_input.textChanged.connect(self._on_current_tag_text_changed)
-        artist_display_layout.addWidget(self.current_artist_label)
-        artist_display_layout.addWidget(self.current_artist_input)
-        current_tags_input_layout.addLayout(artist_display_layout)
+        # Tags input fields
+        tags_layout = self._create_tags_input_layout()
 
-        # Title
-        title_display_layout = QHBoxLayout()
-        self.current_title_label = QLabel("Title:")
-        self.current_title_label.setFixedWidth(60)  # Set a fixed width
-        self.current_title_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
-        self.current_title_input = QLineEdit()
-        self.current_title_input.textChanged.connect(self._on_current_tag_text_changed)
-        title_display_layout.addWidget(self.current_title_label)
-        title_display_layout.addWidget(self.current_title_input)
-        current_tags_input_layout.addLayout(title_display_layout)
-
-        # Album
-        album_display_layout = QHBoxLayout()
-        self.current_album_label = QLabel("Album:")
-        self.current_album_label.setFixedWidth(60)  # Set a fixed width
-        self.current_album_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
-        self.current_album_input = QLineEdit()
-        self.current_album_input.textChanged.connect(self._on_current_tag_text_changed)
-        album_display_layout.addWidget(self.current_album_label)
-        album_display_layout.addWidget(self.current_album_input)
-        current_tags_input_layout.addLayout(album_display_layout)
-
-        # Year
-        year_display_layout = QHBoxLayout()
-        self.current_year_label = QLabel("Year:")
-        self.current_year_label.setFixedWidth(60)  # Set a fixed width
-        self.current_year_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
-        self.current_year_input = QLineEdit()
-        self.current_year_input.textChanged.connect(self._on_current_tag_text_changed)
-        year_display_layout.addWidget(self.current_year_label)
-        year_display_layout.addWidget(self.current_year_input)
-        current_tags_input_layout.addLayout(year_display_layout)
-
-        # Track
-        track_display_layout = QHBoxLayout()
-        self.current_track_label = QLabel("Track:")
-        self.current_track_label.setFixedWidth(60)
-        self.current_track_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
-        self.current_track_input = QLineEdit()
-        self.current_track_input.textChanged.connect(self._on_current_tag_text_changed)
-        track_display_layout.addWidget(self.current_track_label)
-        track_display_layout.addWidget(self.current_track_input)
-        current_tags_input_layout.addLayout(track_display_layout)
-
-        # Genre
-        genre_display_layout = QHBoxLayout()
-        self.current_genre_label = QLabel("Genre:")
-        self.current_genre_label.setFixedWidth(60)  # Set a fixed width
-        self.current_genre_label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
-        self.current_genre_input = QLineEdit()
-        self.current_genre_input.textChanged.connect(self._on_current_tag_text_changed)
-        genre_display_layout.addWidget(self.current_genre_label)
-        genre_display_layout.addWidget(self.current_genre_input)
-        current_tags_input_layout.addLayout(genre_display_layout)
-
-        tags_and_cover_layout.addLayout(current_tags_input_layout)
-
-        # Disc Cover Placeholder
+        # Disc cover placeholder
         self.disc_cover_label = ClickableLabel("Disc Cover")
         self.disc_cover_label.setFixedSize(256, 256)  # Square box
         self.disc_cover_label.setStyleSheet(
@@ -627,26 +653,53 @@ class AutoSongTaggerUI(QWidget):
         self.disc_cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.disc_cover_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.disc_cover_label.clicked.connect(self._on_disc_cover_clicked)
+
+        tags_and_cover_layout.addLayout(tags_layout)
         tags_and_cover_layout.addWidget(self.disc_cover_label)
 
-        main_layout.addWidget(self.current_tags_label)
-        main_layout.addLayout(tags_and_cover_layout)
+        layout.addWidget(self.current_tags_label)
+        layout.addLayout(tags_and_cover_layout)
 
-        # Progress Bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.hide()  # Initially hidden
-        main_layout.addWidget(self.progress_bar)
+        return layout
 
-        self.setLayout(main_layout)
+    def _create_tags_input_layout(self) -> QVBoxLayout:
+        """Create the layout for tag input fields."""
+        layout = QVBoxLayout()
 
-    ############################################################################
+        # Define fields to create
+        fields = [
+            ("Artist", "current_artist_input"),
+            ("Title", "current_title_input"),
+            ("Album", "current_album_input"),
+            ("Year", "current_year_input"),
+            ("Track", "current_track_input"),
+            ("Genre", "current_genre_input"),
+        ]
+
+        for label_text, input_name in fields:
+            field_layout = QHBoxLayout()
+
+            label = QLabel(f"{label_text}:")
+            label.setFixedWidth(60)
+            label.setAlignment(RIGHT_VCENTER_ALIGNMENT)
+
+            input_field = QLineEdit()
+            input_field.textChanged.connect(self._on_current_tag_text_changed)
+
+            # Store reference to the input field
+            setattr(self, input_name, input_field)
+
+            field_layout.addWidget(label)
+            field_layout.addWidget(input_field)
+            layout.addLayout(field_layout)
+
+            # Also store the label if needed
+            setattr(self, f"current_{label_text.lower()}_label", label)
+
+        return layout
 
     def _apply_styles(self):
-        """Applies CSS styles to the application.
-
-        Sets the stylesheet for the main application window.
-        """
+        """Apply CSS styles to the application."""
         self.setStyleSheet(
             """
             QWidget {
@@ -701,43 +754,17 @@ class AutoSongTaggerUI(QWidget):
         """
         )
 
-    ############################################################################
-
-    def save_settings(self):
-        """Saves current window size and position to auto_song_tagger.cfg."""
-        config = configparser.ConfigParser()
-        config["MainWindow"] = {
-            "x": str(self.x()),
-            "y": str(self.y()),
-            "width": str(self.width()),
-            "height": str(self.height()),
-        }
-
-        # Save column widths
-        header = self.results_list.horizontalHeader()
-        column_widths = [str(header.sectionSize(i)) for i in range(header.count())]
-        config["ColumnWidths"] = {"widths": ",".join(column_widths)}
-
-        with open(CONFIG_FILE_NAME, "w") as config_file:
-            config.write(config_file)
-
-    ############################################################################
-
-    def closeEvent(self, event: QCloseEvent):
-        """Overrides the close event to save window settings."""
-        self.save_settings()
-        event.accept()
-
-    ############################################################################
+    # =========================================================================
+    # FILE OPERATIONS
+    # =========================================================================
 
     def browse_song_file(self):
-        """Opens a file dialog to select an MP3 or Opus file and updates the UI."""
+        """Open file dialog to select an audio file and update UI."""
         file_dialog = QFileDialog(self)
         file_dialog.setNameFilter("Audio files (*.mp3 *.opus)")
 
         if file_dialog.exec():
             selected_files = file_dialog.selectedFiles()
-
             if selected_files:
                 self.song_file_path = selected_files[0]
                 self.file_path_input.setText(self.song_file_path)
@@ -750,23 +777,20 @@ class AutoSongTaggerUI(QWidget):
                 )
                 self.apply_button.setEnabled(False)
 
-    ############################################################################
-
     def parse_filename_for_artist_title(self):
-        """Parses artist and title from the selected MP3 filename and populates
-        the input fields.
-        """
+        """Parse artist and title from selected filename and populate input fields."""
         if self.song_file_path:
             artist, title = parse_artist_title_from_filename(self.song_file_path)
-
             if artist and title:
                 self.artist_input.setText(artist)
                 self.title_input.setText(title)
 
-    ############################################################################
+    # =========================================================================
+    # TAG DISPLAY AND EXTRACTION
+    # =========================================================================
 
     def _clear_tag_fields(self, message: str | None = None):
-        """Clears the tag display fields and optionally shows a message."""
+        """Clear the tag display fields and optionally show a message."""
         self.current_artist_input.setText(message or "")
         self.current_title_input.clear()
         self.current_album_input.clear()
@@ -774,24 +798,21 @@ class AutoSongTaggerUI(QWidget):
         self.current_track_input.clear()
         self.current_genre_input.clear()
 
-    ############################################################################
-
-    def _get_mp3_tag_value(self, tags: ID3 | None, tag_name: str, default: str = "N/A"):
-        """Helper to safely get MP3 tag value."""
+    def _get_mp3_tag_value(
+        self, tags: ID3 | None, tag_name: str, default: str = "N/A"
+    ) -> str:
+        """Safely get MP3 tag value."""
         if tags is not None and tag_name in tags and tags[tag_name].text:
             return str(tags[tag_name].text[0])
         return default
 
-    ############################################################################
-
     def _extract_mp3_tags(self, audio: MP3) -> dict[str, str]:
-        """Extracts ID3 tags from an MP3 file."""
+        """Extract ID3 tags from an MP3 file."""
         tags = audio.tags
         year = "N/A"
 
         if tags and "TDRC" in tags and tags["TDRC"].text:
             year_str = str(tags["TDRC"].text[0])
-
             if len(year_str) >= 4 and year_str[:4].isdigit():
                 year = year_str[:4]
 
@@ -804,10 +825,8 @@ class AutoSongTaggerUI(QWidget):
             "genre": self._get_mp3_tag_value(tags, "TCON"),
         }
 
-    ############################################################################
-
     def _extract_ogg_tags(self, audio: OggOpus) -> dict[str, str]:
-        """Extracts tags from an OggOpus file."""
+        """Extract tags from an OggOpus file."""
         tags = audio.tags
         if tags is None:
             return {
@@ -827,21 +846,16 @@ class AutoSongTaggerUI(QWidget):
             "genre": tags.get("genre", ["N/A"])[0],
         }
 
-    ############################################################################
-
     def _extract_tags_from_audio(self, audio: MP3 | OggOpus) -> dict[str, str]:
-        """Extracts tags from an audio file based on its type."""
+        """Extract tags from audio file based on its type."""
         if isinstance(audio, MP3):
             return self._extract_mp3_tags(audio)
         elif isinstance(audio, OggOpus):
             return self._extract_ogg_tags(audio)
-        empty_dict: dict[str, str] = {}
-        return empty_dict
-
-    ############################################################################
+        return {}
 
     def _populate_tag_fields(self, tags: dict[str, str]):
-        """Populates the UI fields with the given tags."""
+        """Populate UI fields with the given tags."""
         self.current_artist_input.setText(tags.get("artist", "N/A"))
         self.current_title_input.setText(tags.get("title", "N/A"))
         self.current_album_input.setText(tags.get("album", "N/A"))
@@ -849,15 +863,11 @@ class AutoSongTaggerUI(QWidget):
         self.current_track_input.setText(tags.get("track", "N/A"))
         self.current_genre_input.setText(tags.get("genre", "N/A"))
 
-    ############################################################################
-
-    def _handle_initial_tag_display_checks(
-        self,
-    ) -> tuple[MP3 | OggOpus | None, bool]:
-        """Handles initial checks and error conditions for displaying tags."""
+    def _handle_initial_tag_display_checks(self) -> tuple[MP3 | OggOpus | None, bool]:
+        """Handle initial checks and error conditions for displaying tags."""
         if not self.song_file_path:
             self._clear_tag_fields(NO_FILE_SELECTED_TEXT)
-            return None, True  # Return None for audio, True for handled
+            return None, True
 
         try:
             audio = get_audio_file(self.song_file_path)
@@ -869,44 +879,39 @@ class AutoSongTaggerUI(QWidget):
             self._clear_tag_fields("No tags found.")
             return None, True
 
-        return audio, False  # Return audio object, False for not handled
-
-    ############################################################################
+        return audio, False
 
     def display_current_tags(self):
-        """Displays the current tags of the selected audio file."""
+        """Display current tags of the selected audio file."""
         audio, handled = self._handle_initial_tag_display_checks()
-
         if handled:
             return
 
-        assert audio is not None
         tags = self._extract_tags_from_audio(audio)
-
         if not tags:
-            return  # Should not happen
+            return
 
         self._populate_tag_fields(tags)
 
         # Store original tags for comparison
         self._original_tags = tags
-        # Update button state based on initial load
+        # Update button state
         self._on_current_tag_text_changed()
 
-    ############################################################################
+    # =========================================================================
+    # COVER ART HANDLING
+    # =========================================================================
 
     def _extract_mp3_cover(self, audio: MP3) -> bytes | None:
-        """Extracts cover data from an MP3 file."""
+        """Extract cover data from MP3 file."""
         if audio.tags:
             apic_frames = audio.tags.getall("APIC")
             if apic_frames:
                 return apic_frames[0].data
         return None
 
-    ############################################################################
-
     def _extract_ogg_opus_cover(self, audio: OggOpus) -> bytes | None:
-        """Extracts cover data from an OggOpus file."""
+        """Extract cover data from OggOpus file."""
         if audio.tags is not None and "metadata_block_picture" in audio.tags:
             try:
                 cover_data = base64.b64decode(audio.tags["metadata_block_picture"][0])
@@ -916,10 +921,8 @@ class AutoSongTaggerUI(QWidget):
                 pass
         return None
 
-    ############################################################################
-
     def display_current_cover(self):
-        """Displays the current album cover from the audio file, if available."""
+        """Display current album cover from audio file, if available."""
         if not self.song_file_path:
             self.disc_cover_label.clear()
             self.disc_cover_label.setText(NO_FILE_SELECTED_TEXT)
@@ -932,8 +935,7 @@ class AutoSongTaggerUI(QWidget):
             self.disc_cover_label.setText("Error loading file.")
             return
 
-        cover_data: bytes | None = None
-
+        cover_data = None
         if isinstance(audio, MP3):
             cover_data = self._extract_mp3_cover(audio)
         elif isinstance(audio, OggOpus):
@@ -948,17 +950,45 @@ class AutoSongTaggerUI(QWidget):
                 Qt.TransformationMode.SmoothTransformation,
             )
             self.disc_cover_label.setPixmap(scaled_pixmap)
-            self.disc_cover_label.setText("")  # Clear text if image is loaded
+            self.disc_cover_label.setText("")  # Clear text if image loaded
         else:
             self.disc_cover_label.clear()
             self.disc_cover_label.setText("No cover found.")
 
-    ############################################################################
+    def _on_disc_cover_clicked(self):
+        """Handle click event on disc cover to select new cover image."""
+        file_dialog = QFileDialog(self)
+        file_dialog.setNameFilter("Image files (*.png *.jpg *.jpeg *.bmp *.gif *.webp)")
+
+        if file_dialog.exec():
+            selected_files = file_dialog.selectedFiles()
+            if selected_files:
+                image_path = selected_files[0]
+                try:
+                    with open(image_path, "rb") as f:
+                        self._new_cover_data = f.read()
+
+                    pixmap = QPixmap()
+                    pixmap.loadFromData(self._new_cover_data)
+                    scaled_pixmap = pixmap.scaled(
+                        self.disc_cover_label.size(),
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    self.disc_cover_label.setPixmap(scaled_pixmap)
+                    self.disc_cover_label.setText("")  # Clear text if image loaded
+                except Exception as e:
+                    QMessageBox.warning(
+                        self, "Error Loading Image", f"Could not load image: {e}"
+                    )
+                    self._new_cover_data = None
+
+    # =========================================================================
+    # METADATA FETCHING AND APPLICATION
+    # =========================================================================
 
     def fetch_metadata(self):
-        """Fetches metadata from MusicBrainz based on artist and title input
-        fields and populates the results list.
-        """
+        """Fetch metadata from MusicBrainz and populate results list."""
         artist = self.artist_input.text().strip()
         title = self.title_input.text().strip()
 
@@ -994,89 +1024,52 @@ class AutoSongTaggerUI(QWidget):
             )
         )
 
-        for _, meta in enumerate(self.metadata_options):
+        # Populate results table
+        for meta in self.metadata_options:
             row_position = self.results_list.rowCount()
             self.results_list.insertRow(row_position)
 
-            artist_item = QTableWidgetItem(meta["artist"])
-            artist_item.setFlags(artist_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.results_list.setItem(row_position, 0, artist_item)
-
-            title_item = QTableWidgetItem(meta["title"])
-            title_item.setFlags(title_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.results_list.setItem(row_position, 1, title_item)
-
-            album_item = QTableWidgetItem(meta["album"])
-            album_item.setFlags(album_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.results_list.setItem(row_position, 2, album_item)
-
-            year_item = QTableWidgetItem(meta["year"])
-            year_item.setFlags(year_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.results_list.setItem(row_position, 3, year_item)
-
-            track_item = QTableWidgetItem(meta["track"])
-            track_item.setFlags(track_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.results_list.setItem(row_position, 4, track_item)
-
-            genre_item = QTableWidgetItem(meta["genre"])
-            genre_item.setFlags(genre_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.results_list.setItem(row_position, 5, genre_item)
+            # Create non-editable items for each field
+            fields = ["artist", "title", "album", "year", "track", "genre"]
+            for col, field in enumerate(fields):
+                item = QTableWidgetItem(meta[field])
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.results_list.setItem(row_position, col, item)
 
         self.results_list.resizeColumnsToContents()
 
-    ############################################################################
-
     def enable_apply_button(self):
-        """Enables or disables the apply button based on item selection in the
-        results list, and populates input fields with selected metadata.
-        """
+        """Enable apply button based on item selection and populate input fields."""
         selected_indexes = self.results_list.selectedIndexes()
 
         if selected_indexes:
             self.apply_button.setEnabled(True)
             selected_row = selected_indexes[0].row()
 
-            # Get data from the selected row
-            artist_item = self.results_list.item(selected_row, 0)
-            artist = artist_item.text() if artist_item else ""
-            title_item = self.results_list.item(selected_row, 1)
-            title = title_item.text() if title_item else ""
-            album_item = self.results_list.item(selected_row, 2)
-            album = album_item.text() if album_item else ""
-            year_item = self.results_list.item(selected_row, 3)
-            year = year_item.text() if year_item else ""
-            track_item = self.results_list.item(selected_row, 4)
-            track = track_item.text() if track_item else ""
-            genre_item = self.results_list.item(selected_row, 5)
-            genre = genre_item.text() if genre_item else ""
+            # Get data from selected row
+            field_data = {}
+            fields = ["artist", "title", "album", "year", "track", "genre"]
+
+            for col, field in enumerate(fields):
+                item = self.results_list.item(selected_row, col)
+                field_data[field] = item.text() if item else ""
 
             # Populate current tag display fields
-            self.current_artist_input.setText(artist)
-            self.current_title_input.setText(title)
-            self.current_album_input.setText(album)
-            self.current_year_input.setText(year)
-            self.current_track_input.setText(track)
-            self.current_genre_input.setText(genre)
-            # Update button state after populating fields
+            for field, value in field_data.items():
+                getattr(self, f"current_{field}_input").setText(value)
+
+            # Update button state
             self._on_current_tag_text_changed()
         else:
             self.apply_button.setEnabled(False)
-            # Clear current tag display fields if nothing is selected
-            self.current_artist_input.clear()
-            self.current_title_input.clear()
-            self.current_album_input.clear()
-            self.current_year_input.clear()
-            self.current_track_input.clear()
-            self.current_genre_input.clear()
-            # Update button state after clearing fields
+            # Clear current tag display fields
+            for field in ["artist", "title", "album", "year", "track", "genre"]:
+                getattr(self, f"current_{field}_input").clear()
+            # Update button state
             self._on_current_tag_text_changed()
 
-    ############################################################################
-
     def apply_tags(self):
-        """Applies the selected metadata option as tags to the audio file, and
-        refreshes the UI to display the updated tags and cover art.
-        """
+        """Apply selected metadata as tags to audio file and refresh UI."""
         chosen_metadata = {
             "artist": self.current_artist_input.text(),
             "title": self.current_title_input.text(),
@@ -1086,7 +1079,7 @@ class AutoSongTaggerUI(QWidget):
             "genre": self.current_genre_input.text(),
         }
 
-        if not chosen_metadata:
+        if not any(chosen_metadata.values()):
             QMessageBox.warning(self, "Error", "No metadata to apply.")
             return
 
@@ -1101,12 +1094,12 @@ class AutoSongTaggerUI(QWidget):
         self.tag_writer_thread.start()
 
     def _on_tags_written(self, success: bool, message: str):
-        """Slot to handle the result of the tag writing thread."""
+        """Handle the result of tag writing thread."""
         if success:
             QMessageBox.information(self, "Tags Applied", message)
             self.display_current_tags()
             self.display_current_cover()
-            self._new_cover_data = None  # Clear the new cover data after applying
+            self._new_cover_data = None  # Clear new cover data after applying
         else:
             QMessageBox.warning(self, "Error", message)
 
@@ -1114,20 +1107,14 @@ class AutoSongTaggerUI(QWidget):
         self.apply_button.setEnabled(True)
         self.progress_bar.hide()
 
-    ############################################################################
-
     def _on_progress_update(self, message: str):
-        """Slot to update the progress bar with messages."""
+        """Update progress bar with messages."""
         self.progress_bar.show()
         self.progress_bar.setFormat(message)
-        self.progress_bar.setRange(0, 0)  # Indeterminate progress bar
-
-    ############################################################################
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
 
     def _on_current_tag_text_changed(self):
-        """Enables the apply button if an audio file is selected and changes are
-        detected in any current tag QLineEdit.
-        """
+        """Enable apply button if changes detected in current tag fields."""
         if not self.song_file_path:
             self.apply_button.setEnabled(False)
             return
@@ -1141,64 +1128,26 @@ class AutoSongTaggerUI(QWidget):
             "genre": self.current_genre_input.text(),
         }
 
-        # Check if any changes have been made to the current tags
+        # Check if changes were made
         tags_changed = False
-
         if hasattr(self, "_original_tags"):
             if self._original_tags != current_edited_tags:
                 tags_changed = True
         else:
-            # If no original tags were loaded, assume changes if fields are not
-            # empty
-
+            # If no original tags, assume changes if fields are not empty
             if any(current_edited_tags.values()):
                 tags_changed = True
 
-        # Check if a row is selected in the results list
+        # Check if a row is selected
         row_selected = bool(self.results_list.selectedIndexes())
 
         # Enable button if tags changed OR a row is selected
-
-        if tags_changed or row_selected:
-            self.apply_button.setEnabled(True)
-        else:
-            self.apply_button.setEnabled(False)
-
-    ############################################################################
-
-    def _on_disc_cover_clicked(self):
-        """Handles the click event on the disc cover placeholder, allowing the
-        user to select a new cover image.
-        """
-        file_dialog = QFileDialog(self)
-        file_dialog.setNameFilter("Image files (*.png *.jpg *.jpeg *.bmp *.gif *.webp)")
-
-        if file_dialog.exec():
-            selected_files = file_dialog.selectedFiles()
-
-            if selected_files:
-                image_path = selected_files[0]
-                try:
-                    with open(image_path, "rb") as f:
-                        self._new_cover_data = f.read()
-
-                    pixmap = QPixmap()
-                    pixmap.loadFromData(self._new_cover_data)
-                    scaled_pixmap = pixmap.scaled(
-                        self.disc_cover_label.size(),
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                    self.disc_cover_label.setPixmap(scaled_pixmap)
-                    self.disc_cover_label.setText("")  # Clear text if image is loaded
-                except Exception as e:
-                    QMessageBox.warning(
-                        self, "Error Loading Image", f"Could not load image: {e}"
-                    )
-                    self._new_cover_data = None
+        self.apply_button.setEnabled(tags_changed or row_selected)
 
 
-################################################################################
+# =============================================================================
+# MAIN EXECUTION
+# =============================================================================
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
