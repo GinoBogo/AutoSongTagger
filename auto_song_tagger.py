@@ -134,21 +134,57 @@ def _get_genre(recording: dict):
 ################################################################################
 
 
-def _get_release_info(recording: dict):
+def _choose_release(release_list: list) -> dict:
+    """Chooses the best release from a list of releases."""
+    releases_with_date = [r for r in release_list if "date" in r]
+    return releases_with_date[0] if releases_with_date else release_list[0]
+
+
+################################################################################
+
+
+def _fetch_and_cache_release_details(
+    release_id: str, release_cache: dict
+) -> dict | None:
+    """Fetches release details from MusicBrainz and caches them."""
+
+    if release_id in release_cache:
+        return release_cache[release_id]
+    try:
+        release_details = musicbrainzngs.get_release_by_id(
+            release_id, includes=["recordings"]
+        )
+        release_cache[release_id] = release_details
+
+        return release_details
+
+    except musicbrainzngs.WebServiceError as exc:
+        print(f"Error fetching release details from MusicBrainz: {exc}")
+
+        return None
+
+
+################################################################################
+
+
+def _get_release_info(recording: dict, release_cache: dict) -> tuple[str, str, str]:
     """Extracts album, year, and track from a recording's release list."""
     album, year, track = "", "", ""
 
-    if "release-list" in recording and recording["release-list"]:
-        releases_with_date = [r for r in recording["release-list"] if "date" in r]
-        chosen_release = (
-            releases_with_date[0]
-            if releases_with_date
-            else recording["release-list"][0]
-        )
+    if not ("release-list" in recording and recording["release-list"]):
+        return album, year, track
 
-        album = chosen_release.get("title", "")
-        year = chosen_release.get("date", "")
-        track = _get_track_number(chosen_release, recording["id"])
+    chosen_release = _choose_release(recording["release-list"])
+    album = chosen_release.get("title", "")
+    year = chosen_release.get("date", "")
+    release_id = chosen_release.get("id")
+
+    if not release_id:
+        return album, year, track
+
+    release_details = _fetch_and_cache_release_details(release_id, release_cache)
+    if release_details and "release" in release_details:
+        track = _get_track_number(release_details["release"], recording["id"])
 
     return album, year, track
 
@@ -156,9 +192,9 @@ def _get_release_info(recording: dict):
 ################################################################################
 
 
-def _process_recording(recording: dict, artist: str):
+def _process_recording(recording: dict, artist: str, release_cache: dict):
     """Processes a single recording from the MusicBrainz search result."""
-    album, year, track = _get_release_info(recording)
+    album, year, track = _get_release_info(recording, release_cache)
     genre = _get_genre(recording)
 
     return {
@@ -193,7 +229,11 @@ def fetch_song_metadata(artist: str, title: str):
     if not result.get("recording-list"):
         return []
 
-    return [_process_recording(rec, artist) for rec in result["recording-list"]]
+    release_cache: dict = {}
+    return [
+        _process_recording(rec, artist, release_cache)
+        for rec in result["recording-list"]
+    ]
 
 
 ################################################################################
