@@ -30,7 +30,7 @@ from mutagen.mp3 import MP3
 from mutagen.oggopus import OggOpus
 
 from PySide6.QtCore import Qt, Signal, QThread
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QCloseEvent, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -67,7 +67,13 @@ class TagWriterThread(QThread):
     finished = Signal(bool, str)  # Signal(success, message)
     progress_signal = Signal(str)  # Signal to emit progress messages
 
-    def __init__(self, song_file, metadata, cover_data, parent=None):
+    def __init__(
+        self,
+        song_file: str,
+        metadata: dict[str, str],
+        cover_data: bytes | None,
+        parent: QWidget | None = None,
+    ):
         super().__init__(parent)
         self.song_file = song_file
         self.metadata = metadata
@@ -87,12 +93,15 @@ class TagWriterThread(QThread):
             self.finished.emit(False, f"Failed to apply tags: {e}")
 
 
+################################################################################
+
+
 class ClickableLabel(QLabel):
     """A QLabel subclass that emits a clicked signal when pressed."""
 
     clicked = Signal()
 
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QMouseEvent):
         """Handles mouse press events and emits the clicked signal."""
         self.clicked.emit()
         super().mousePressEvent(event)
@@ -101,7 +110,7 @@ class ClickableLabel(QLabel):
 ################################################################################
 
 
-def _get_track_number(release, recording_id):
+def _get_track_number(release: dict, recording_id: str):
     """Finds the track number for a recording within a release."""
     if "medium-list" in release:
         for medium in release["medium-list"]:
@@ -115,7 +124,7 @@ def _get_track_number(release, recording_id):
 ################################################################################
 
 
-def _get_genre(recording):
+def _get_genre(recording: dict):
     """Extracts genre from a recording's tag list."""
     if "tag-list" in recording and recording["tag-list"]:
         return ", ".join([tag["name"] for tag in recording["tag-list"]])
@@ -125,7 +134,7 @@ def _get_genre(recording):
 ################################################################################
 
 
-def _get_release_info(recording):
+def _get_release_info(recording: dict):
     """Extracts album, year, and track from a recording's release list."""
     album, year, track = "", "", ""
 
@@ -147,7 +156,7 @@ def _get_release_info(recording):
 ################################################################################
 
 
-def _process_recording(recording, artist):
+def _process_recording(recording: dict, artist: str):
     """Processes a single recording from the MusicBrainz search result."""
     album, year, track = _get_release_info(recording)
     genre = _get_genre(recording)
@@ -165,7 +174,7 @@ def _process_recording(recording, artist):
 ################################################################################
 
 
-def fetch_song_metadata(artist, title):
+def fetch_song_metadata(artist: str, title: str):
     """Fetches song metadata from MusicBrainz based on artist and title.
 
     Args:
@@ -190,7 +199,7 @@ def fetch_song_metadata(artist, title):
 ################################################################################
 
 
-def get_audio_file(file_path: str):
+def get_audio_file(file_path: str) -> MP3 | OggOpus:
     """Factory function to return the correct mutagen audio object based on file
     extension."""
     _, ext = os.path.splitext(file_path)
@@ -347,7 +356,7 @@ def write_tags(
 ################################################################################
 
 
-def parse_artist_title_from_filename(filename):
+def parse_artist_title_from_filename(filename: str):
     """Attempts to parse artist and title from a filename.
 
     Assumes a format like 'Artist - Title.mp3'.
@@ -674,7 +683,7 @@ class AutoSongTaggerUI(QWidget):
 
     ############################################################################
 
-    def closeEvent(self, event):
+    def closeEvent(self, event: QCloseEvent):
         """Overrides the close event to save window settings."""
         self.save_settings()
         event.accept()
@@ -716,7 +725,7 @@ class AutoSongTaggerUI(QWidget):
 
     ############################################################################
 
-    def _clear_tag_fields(self, message=None):
+    def _clear_tag_fields(self, message: str | None = None):
         """Clears the tag display fields and optionally shows a message."""
         self.current_artist_input.setText(message or "")
         self.current_title_input.clear()
@@ -727,20 +736,20 @@ class AutoSongTaggerUI(QWidget):
 
     ############################################################################
 
-    def _get_mp3_tag_value(self, tags, tag_name, default="N/A"):
+    def _get_mp3_tag_value(self, tags: ID3 | None, tag_name: str, default: str = "N/A"):
         """Helper to safely get MP3 tag value."""
-        if tag_name in tags and tags[tag_name].text:
+        if tags is not None and tag_name in tags and tags[tag_name].text:
             return str(tags[tag_name].text[0])
         return default
 
     ############################################################################
 
-    def _extract_mp3_tags(self, audio):
+    def _extract_mp3_tags(self, audio: MP3) -> dict[str, str]:
         """Extracts ID3 tags from an MP3 file."""
         tags = audio.tags
         year = "N/A"
 
-        if "TDRC" in tags and tags["TDRC"].text:
+        if tags and "TDRC" in tags and tags["TDRC"].text:
             year_str = str(tags["TDRC"].text[0])
 
             if len(year_str) >= 4 and year_str[:4].isdigit():
@@ -757,9 +766,18 @@ class AutoSongTaggerUI(QWidget):
 
     ############################################################################
 
-    def _extract_ogg_tags(self, audio):
+    def _extract_ogg_tags(self, audio: OggOpus) -> dict[str, str]:
         """Extracts tags from an OggOpus file."""
         tags = audio.tags
+        if tags is None:
+            return {
+                "artist": "N/A",
+                "title": "N/A",
+                "album": "N/A",
+                "year": "N/A",
+                "track": "N/A",
+                "genre": "N/A",
+            }
         return {
             "artist": tags.get("artist", ["N/A"])[0],
             "title": tags.get("title", ["N/A"])[0],
@@ -771,17 +789,18 @@ class AutoSongTaggerUI(QWidget):
 
     ############################################################################
 
-    def _extract_tags_from_audio(self, audio):
+    def _extract_tags_from_audio(self, audio: MP3 | OggOpus) -> dict[str, str]:
         """Extracts tags from an audio file based on its type."""
         if isinstance(audio, MP3):
             return self._extract_mp3_tags(audio)
         elif isinstance(audio, OggOpus):
             return self._extract_ogg_tags(audio)
-        return {}
+        empty_dict: dict[str, str] = {}
+        return empty_dict
 
     ############################################################################
 
-    def _populate_tag_fields(self, tags):
+    def _populate_tag_fields(self, tags: dict[str, str]):
         """Populates the UI fields with the given tags."""
         self.current_artist_input.setText(tags.get("artist", "N/A"))
         self.current_title_input.setText(tags.get("title", "N/A"))
@@ -792,7 +811,9 @@ class AutoSongTaggerUI(QWidget):
 
     ############################################################################
 
-    def _handle_initial_tag_display_checks(self):
+    def _handle_initial_tag_display_checks(
+        self,
+    ) -> tuple[MP3 | OggOpus | None, bool]:
         """Handles initial checks and error conditions for displaying tags."""
         if not self.song_file_path:
             self._clear_tag_fields(NO_FILE_SELECTED_TEXT)
@@ -819,6 +840,7 @@ class AutoSongTaggerUI(QWidget):
         if handled:
             return
 
+        assert audio is not None
         tags = self._extract_tags_from_audio(audio)
 
         if not tags:
@@ -833,15 +855,17 @@ class AutoSongTaggerUI(QWidget):
 
     ############################################################################
 
-    def _extract_mp3_cover(self, audio):
+    def _extract_mp3_cover(self, audio: MP3) -> bytes | None:
         """Extracts cover data from an MP3 file."""
-        if audio.tags is not None and "APIC:" in audio.tags:
-            return audio.tags["APIC:"].data
+        if audio.tags:
+            apic_frames = audio.tags.getall("APIC")
+            if apic_frames:
+                return apic_frames[0].data
         return None
 
     ############################################################################
 
-    def _extract_ogg_opus_cover(self, audio):
+    def _extract_ogg_opus_cover(self, audio: OggOpus) -> bytes | None:
         """Extracts cover data from an OggOpus file."""
         if audio.tags is not None and "metadata_block_picture" in audio.tags:
             try:
@@ -1036,7 +1060,7 @@ class AutoSongTaggerUI(QWidget):
         self.tag_writer_thread.progress_signal.connect(self._on_progress_update)
         self.tag_writer_thread.start()
 
-    def _on_tags_written(self, success, message):
+    def _on_tags_written(self, success: bool, message: str):
         """Slot to handle the result of the tag writing thread."""
         if success:
             QMessageBox.information(self, "Tags Applied", message)
@@ -1052,7 +1076,7 @@ class AutoSongTaggerUI(QWidget):
 
     ############################################################################
 
-    def _on_progress_update(self, message):
+    def _on_progress_update(self, message: str):
         """Slot to update the progress bar with messages."""
         self.progress_bar.show()
         self.progress_bar.setFormat(message)
