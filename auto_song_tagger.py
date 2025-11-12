@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """
-A GUI application for automatically tagging audio files using MusicBrainz metadata.
+A GUI application for automatically tagging audio files using MusicBrainz,
+TheAudioDB, Deezer, and Lyrics.ovh APIs.
 
 Author: Gino Bogo
 
-Features:
-- Select audio files (MP3 or Opus)
-- Parse artist and title from filename
-- Fetch metadata from MusicBrainz
-- Display current file tags
-- Choose from multiple metadata options
-- Apply selected metadata as tags
-- Handle cover art
+Features: - Select audio files (MP3 or Opus) - Parse artist and title from
+filename - Fetch metadata from MusicBrainz and public APIs - Display current
+file tags - Choose from multiple metadata options - Apply selected metadata as
+tags - Handle cover art from multiple sources
 """
 
 import base64
 import os
 import sys
 import configparser
+import requests
+
+from typing import Optional
 
 import musicbrainzngs
 
@@ -57,6 +57,139 @@ CONFIG_FILE_NAME = "auto_song_tagger.cfg"
 
 # MusicBrainz client setup
 musicbrainzngs.set_useragent("AutoSongTagger", "0.1", "your-email@example.com")
+
+# =============================================================================
+# PUBLIC MUSIC APIs
+# =============================================================================
+
+
+class PublicMusicAPIs:
+    """Manages public music APIs that don't require authentication."""
+
+    def search_audiodb(self, artist: str, title: str) -> list[dict]:
+        """Search TheAudioDB API (free, no authentication required)."""
+        try:
+            url = "https://theaudiodb.com/api/v1/json/2/searchtrack.php"
+            params = {"s": artist, "t": title}
+            response = requests.get(url, params=params, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                results = []
+                tracks = data.get("track", [])
+                for track in tracks:
+                    # Extract year from release date
+                    year = ""
+                    release_date = track.get("intYearReleased", "")
+                    if release_date and len(str(release_date)) >= 4:
+                        year = str(release_date)[:4]
+
+                    results.append(
+                        {
+                            "title": track.get("strTrack", ""),
+                            "artist": track.get("strArtist", ""),
+                            "album": track.get("strAlbum", ""),
+                            "year": year,
+                            "track": track.get("strTrackNumber", ""),
+                            "genre": track.get("strGenre", ""),
+                            "cover_url": track.get("strTrackThumb", "")
+                            or track.get("strAlbumThumb", ""),
+                            "source": "TheAudioDB",
+                        }
+                    )
+                return results
+        except Exception as e:
+            print(f"TheAudioDB search error: {e}")
+        return []
+
+    def search_lrcat(self, artist: str, title: str) -> list[dict]:
+        """Search Lyrics.ovh API for basic track info."""
+        try:
+            # First try to get lyrics which often includes basic metadata
+            url = f"https://api.lyrics.ovh/v1/{artist}/{title}"
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                # If we get lyrics, create basic metadata entry
+                return [
+                    {
+                        "title": title,
+                        "artist": artist,
+                        "album": "",
+                        "year": "",
+                        "track": "",
+                        "genre": "",
+                        "source": "Lyrics.ovh",
+                        "has_lyrics": True,
+                    }
+                ]
+        except Exception as e:
+            print(f"Lyrics.ovh search error: {e}")
+        return []
+
+    def search_musicbrainz_cover_art(self, release_id: str) -> Optional[str]:
+        """Get cover art from MusicBrainz Cover Art Archive."""
+        try:
+            url = f"https://coverartarchive.org/release/{release_id}"
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                images = data.get("images", [])
+                if images:
+                    # Get the first front cover, or first image if no front cover
+                    front_covers = [img for img in images if img.get("front", False)]
+                    if front_covers:
+                        return front_covers[0].get("image")
+                    else:
+                        return images[0].get("image")
+        except Exception as e:
+            print(f"Cover Art Archive error: {e}")
+        return None
+
+    def search_deezer(self, artist: str, title: str) -> list[dict]:
+        """Search Deezer API (limited free access without credentials)."""
+        try:
+            url = "https://api.deezer.com/search"
+            params = {"q": f'artist:"{artist}" track:"{title}"', "limit": 5}
+            response = requests.get(url, params=params, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                results = []
+                for track in data.get("data", []):
+                    album = track.get("album", {})
+
+                    # Extract year from release date
+                    year = ""
+                    release_date = track.get("release_date", "")
+                    if release_date and len(release_date) >= 4:
+                        year = release_date[:4]
+
+                    results.append(
+                        {
+                            "title": track.get("title", ""),
+                            "artist": track.get("artist", {}).get("name", ""),
+                            "album": album.get("title", ""),
+                            "year": year,
+                            "track": str(track.get("track_position", "")),
+                            "genre": "",  # Deezer doesn't provide genre in search results
+                            "cover_url": album.get("cover_medium", "")
+                            or album.get("cover", ""),
+                            "source": "Deezer",
+                        }
+                    )
+                return results
+        except Exception as e:
+            print(f"Deezer search error: {e}")
+        return []
+
+    def download_cover_art(self, url: str) -> Optional[bytes]:
+        """Download cover art from URL."""
+        try:
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                return response.content
+        except Exception as e:
+            print(f"Error downloading cover art: {e}")
+        return None
+
 
 # =============================================================================
 # THREADING CLASSES
@@ -100,15 +233,58 @@ class MetadataFetcherThread(QThread):
     """QThread for fetching metadata in a separate thread."""
 
     finished = Signal(list)  # Signal(metadata_options)
+    progress_signal = Signal(str)  # Signal for progress messages
 
-    def __init__(self, artist: str, title: str, parent: QWidget | None = None):
+    def __init__(
+        self,
+        artist: str,
+        title: str,
+        use_public_apis: bool = False,
+        parent: QWidget | None = None,
+    ):
         super().__init__(parent)
         self.artist = artist
         self.title = title
+        self.use_public_apis = use_public_apis
+        self.public_apis = PublicMusicAPIs() if use_public_apis else None
 
     def run(self):
         """Main thread execution method."""
-        metadata_options = fetch_song_metadata(self.artist, self.title)
+        metadata_options = []
+
+        # First try MusicBrainz
+        self.progress_signal.emit("Searching MusicBrainz...")
+        musicbrainz_results = fetch_song_metadata(self.artist, self.title)
+
+        # Enhance MusicBrainz results with cover art
+        for result in musicbrainz_results:
+            # Try to get cover art for MusicBrainz results
+            if "release_id" in result and self.public_apis:
+                cover_url = self.public_apis.search_musicbrainz_cover_art(
+                    result["release_id"]
+                )
+                if cover_url:
+                    result["cover_url"] = cover_url
+                    result["source"] = "MusicBrainz (with cover)"
+
+        metadata_options.extend(musicbrainz_results)
+
+        # Then try public APIs if enabled
+        if self.use_public_apis and self.public_apis:
+            self.progress_signal.emit("Searching TheAudioDB...")
+            audiodb_results = self.public_apis.search_audiodb(self.artist, self.title)
+            metadata_options.extend(audiodb_results)
+
+            self.progress_signal.emit("Searching Deezer...")
+            deezer_results = self.public_apis.search_deezer(self.artist, self.title)
+            metadata_options.extend(deezer_results)
+
+            # Only use Lyrics.ovh if no other results found
+            if not metadata_options:
+                self.progress_signal.emit("Searching Lyrics.ovh...")
+                lyrics_results = self.public_apis.search_lrcat(self.artist, self.title)
+                metadata_options.extend(lyrics_results)
+
         self.finished.emit(metadata_options)
 
 
@@ -224,6 +400,12 @@ def _process_recording(recording: dict, artist: str, release_cache: dict) -> dic
 
     genre = _get_genre(recording)
 
+    # Store release_id for cover art lookup
+    release_id = ""
+    if "release-list" in recording and recording["release-list"]:
+        chosen_release = _choose_release(recording["release-list"])
+        release_id = chosen_release.get("id", "")
+
     return {
         "title": recording.get("title", ""),
         "artist": artist,
@@ -231,6 +413,9 @@ def _process_recording(recording: dict, artist: str, release_cache: dict) -> dic
         "year": year,
         "track": track,
         "genre": genre,
+        "source": "MusicBrainz",
+        "release_id": release_id,
+        "cover_url": None,  # Will be populated later if available
     }
 
 
@@ -464,6 +649,7 @@ class AutoSongTaggerUI(QWidget):
         self.metadata_options = []
         self.tag_writer_thread = None
         self.metadata_fetcher_thread = None
+        self.public_apis = PublicMusicAPIs()
 
         # Declare UI elements for static analysis
         self.current_artist_input: QLineEdit
@@ -651,9 +837,9 @@ class AutoSongTaggerUI(QWidget):
 
         self.results_label = QLabel("Metadata Options:")
         self.results_list = QTableWidget()
-        self.results_list.setColumnCount(6)  # Artist, Title, Album, Year, Track, Genre
+        self.results_list.setColumnCount(7)  # Added Source column
         self.results_list.setHorizontalHeaderLabels(
-            ["Artist", "Title", "Album", "Year", "Track", "Genre"]
+            ["Source", "Artist", "Title", "Album", "Year", "Track", "Genre"]
         )
 
         header = self.results_list.horizontalHeader()
@@ -812,7 +998,7 @@ class AutoSongTaggerUI(QWidget):
                 self.parse_filename_for_artist_title()
                 self.results_list.clear()
                 self.results_list.setHorizontalHeaderLabels(
-                    ["Artist", "Title", "Album", "Year", "Track", "Genre"]
+                    ["Source", "Artist", "Title", "Album", "Year", "Track", "Genre"]
                 )
                 self.apply_button.setEnabled(False)
 
@@ -1028,7 +1214,7 @@ class AutoSongTaggerUI(QWidget):
     # =========================================================================
 
     def fetch_metadata(self):
-        """Fetch metadata from MusicBrainz and populate results list."""
+        """Fetch metadata from MusicBrainz and/or public APIs and populate results list."""
         artist = self.artist_input.text().strip()
         title = self.title_input.text().strip()
 
@@ -1052,9 +1238,15 @@ class AutoSongTaggerUI(QWidget):
         self.progress_bar.setFormat("Fetching metadata...")
         self.progress_bar.show()
 
+        # Always use public APIs
+        use_public_apis = True
+
         # Create and start the metadata fetcher thread
-        self.metadata_fetcher_thread = MetadataFetcherThread(artist, title)
+        self.metadata_fetcher_thread = MetadataFetcherThread(
+            artist, title, use_public_apis
+        )
         self.metadata_fetcher_thread.finished.connect(self._on_metadata_fetched)
+        self.metadata_fetcher_thread.progress_signal.connect(self._on_progress_update)
         self.metadata_fetcher_thread.start()
 
     def _on_metadata_fetched(self, metadata_options: list[dict]):
@@ -1084,9 +1276,9 @@ class AutoSongTaggerUI(QWidget):
             self.results_list.insertRow(row_position)
 
             # Create non-editable items for each field
-            fields = ["artist", "title", "album", "year", "track", "genre"]
+            fields = ["source", "artist", "title", "album", "year", "track", "genre"]
             for col, field in enumerate(fields):
-                item = QTableWidgetItem(meta[field])
+                item = QTableWidgetItem(meta.get(field, ""))
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.results_list.setItem(row_position, col, item)
 
@@ -1102,15 +1294,24 @@ class AutoSongTaggerUI(QWidget):
 
             # Get data from selected row
             field_data = {}
-            fields = ["artist", "title", "album", "year", "track", "genre"]
+            fields = ["source", "artist", "title", "album", "year", "track", "genre"]
 
             for col, field in enumerate(fields):
                 item = self.results_list.item(selected_row, col)
                 field_data[field] = item.text() if item else ""
 
             # Populate current tag display fields
-            for field, value in field_data.items():
-                getattr(self, f"current_{field}_input").setText(value)
+            for field in ["artist", "title", "album", "year", "track", "genre"]:
+                getattr(self, f"current_{field}_input").setText(
+                    field_data.get(field, "")
+                )
+
+            # If this result has cover art, download and display it
+            if selected_row < len(self.metadata_options):
+                metadata = self.metadata_options[selected_row]
+                cover_url = metadata.get("cover_url")
+                if cover_url:
+                    self._download_and_display_cover(cover_url)
 
             # Update button state
             self._on_current_tag_text_changed()
@@ -1121,6 +1322,28 @@ class AutoSongTaggerUI(QWidget):
                 getattr(self, f"current_{field}_input").clear()
             # Update button state
             self._on_current_tag_text_changed()
+
+    def _download_and_display_cover(self, cover_url: str):
+        """Download and display cover art from URL."""
+        if cover_url:
+            # Show loading message
+            self.disc_cover_label.setText("Downloading cover...")
+
+            # Download cover art
+            cover_data = self.public_apis.download_cover_art(cover_url)
+            if cover_data:
+                self._new_cover_data = cover_data
+                pixmap = QPixmap()
+                pixmap.loadFromData(cover_data)
+                scaled_pixmap = pixmap.scaled(
+                    self.disc_cover_label.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self.disc_cover_label.setPixmap(scaled_pixmap)
+                self.disc_cover_label.setText("")  # Clear text if image loaded
+            else:
+                self.disc_cover_label.setText("Failed to download cover")
 
     def apply_tags(self):
         """Apply selected metadata as tags to audio file and refresh UI."""

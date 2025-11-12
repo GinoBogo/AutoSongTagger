@@ -1,3 +1,4 @@
 musicbrainzngs
 PySide6
 mutagen
+requests

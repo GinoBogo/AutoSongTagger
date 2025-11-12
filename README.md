@@ -1,13 +1,13 @@
 # AutoSongTagger
 
 ## Description
-AutoSongTagger is a Python GUI application designed to automatically tag and organize your music collection. It leverages MusicBrainz metadata and provides a user-friendly interface to fetch, select, and apply accurate information to your audio files (MP3 and Opus), making your music library easily searchable and browsable.
+AutoSongTagger is a Python GUI application designed to automatically tag and organize your music collection. It leverages metadata from MusicBrainz and other public music APIs (TheAudioDB, Deezer, Lyrics.ovh), and provides a user-friendly interface to fetch, select, and apply accurate information to your audio files (MP3 and Opus), making your music library easily searchable and browsable.
 
 ## Features
 - **GUI Application:** User-friendly interface for tagging audio files.
 - **File Selection:** Allows selection of MP3 and Opus audio files.
 - **Filename Parsing:** Automatically parses artist and title from filenames (e.g., "Artist - Title.mp3").
-- **MusicBrainz Integration:** Fetches comprehensive metadata (artist, title, album, year, genre) from MusicBrainz.
+- **Metadata Integration:** Fetches comprehensive metadata (artist, title, album, year, genre) from MusicBrainz, TheAudioDB, Deezer, and Lyrics.ovh.
 - **Current Tag Display:** Displays existing tags and album cover art of the selected file.
 - **Metadata Options:** Presents multiple metadata suggestions from MusicBrainz for user selection.
 - **Tag Application:** Applies selected metadata as tags to the audio file.
