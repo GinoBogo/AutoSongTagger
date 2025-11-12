@@ -101,6 +101,70 @@ class ClickableLabel(QLabel):
 ################################################################################
 
 
+def _get_track_number(release, recording_id):
+    """Finds the track number for a recording within a release."""
+    if "medium-list" in release:
+        for medium in release["medium-list"]:
+            if "track-list" in medium:
+                for t in medium["track-list"]:
+                    if t.get("recording", {}).get("id") == recording_id:
+                        return t.get("number", "")
+    return ""
+
+
+################################################################################
+
+
+def _get_genre(recording):
+    """Extracts genre from a recording's tag list."""
+    if "tag-list" in recording and recording["tag-list"]:
+        return ", ".join([tag["name"] for tag in recording["tag-list"]])
+    return ""
+
+
+################################################################################
+
+
+def _get_release_info(recording):
+    """Extracts album, year, and track from a recording's release list."""
+    album, year, track = "", "", ""
+
+    if "release-list" in recording and recording["release-list"]:
+        releases_with_date = [r for r in recording["release-list"] if "date" in r]
+        chosen_release = (
+            releases_with_date[0]
+            if releases_with_date
+            else recording["release-list"][0]
+        )
+
+        album = chosen_release.get("title", "")
+        year = chosen_release.get("date", "")
+        track = _get_track_number(chosen_release, recording["id"])
+
+    return album, year, track
+
+
+################################################################################
+
+
+def _process_recording(recording, artist):
+    """Processes a single recording from the MusicBrainz search result."""
+    album, year, track = _get_release_info(recording)
+    genre = _get_genre(recording)
+
+    return {
+        "title": recording.get("title", ""),
+        "artist": artist,
+        "album": album,
+        "year": year,
+        "track": track,
+        "genre": genre,
+    }
+
+
+################################################################################
+
+
 def fetch_song_metadata(artist, title):
     """Fetches song metadata from MusicBrainz based on artist and title.
 
@@ -111,57 +175,16 @@ def fetch_song_metadata(artist, title):
     Returns:
         list: A list of dictionaries, each containing metadata for a recording.
     """
-    result = musicbrainzngs.search_recordings(artist=artist, recording=title)
-    recordings_metadata = []
+    try:
+        result = musicbrainzngs.search_recordings(artist=artist, recording=title)
+    except musicbrainzngs.WebServiceError as exc:
+        print(f"Error fetching metadata from MusicBrainz: {exc}")
+        return []
 
-    for recording in result["recording-list"]:
-        album = ""
-        year = ""
-        genre = ""
-        track = ""
+    if not result.get("recording-list"):
+        return []
 
-        if "release-list" in recording and recording["release-list"]:
-            # Prioritize releases with a date
-            releases_with_date = [r for r in recording["release-list"] if "date" in r]
-
-            if releases_with_date:
-                # Sort by date to get the earliest or latest, or just pick the
-                # first available. For simplicity, pick the first one with a
-                # date for now.
-                chosen_release = releases_with_date[0]
-                album = chosen_release["title"]
-                year = chosen_release["date"]
-            else:
-                # If no release has a date, just take the first one
-                chosen_release = recording["release-list"][0]
-                album = chosen_release["title"]
-
-            # Find track number in the chosen release
-            if "medium-list" in chosen_release:
-                for medium in chosen_release["medium-list"]:
-                    if "track-list" in medium:
-                        for t in medium["track-list"]:
-                            if t["recording"]["id"] == recording["id"]:
-                                track = t["number"]
-                                break
-                    if track:
-                        break
-
-        if "tag-list" in recording and recording["tag-list"]:
-            # Take the first tag as genre, or concatenate multiple
-            genre = ", ".join([tag["name"] for tag in recording["tag-list"]])
-
-        metadata = {
-            "title": recording["title"],
-            "artist": artist,
-            "album": album,
-            "year": year,
-            "track": track,
-            "genre": genre,
-        }
-        recordings_metadata.append(metadata)
-
-    return recordings_metadata
+    return [_process_recording(rec, artist) for rec in result["recording-list"]]
 
 
 ################################################################################
@@ -548,7 +571,7 @@ class AutoSongTaggerUI(QWidget):
 
         # Disc Cover Placeholder
         self.disc_cover_label = ClickableLabel("Disc Cover")
-        self.disc_cover_label.setFixedSize(192, 192)  # Square box
+        self.disc_cover_label.setFixedSize(256, 256)  # Square box
         self.disc_cover_label.setStyleSheet(
             "background-color: #e0e0e0; border: 1px solid #ccc;"
         )
