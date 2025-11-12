@@ -21,6 +21,7 @@ import sys
 import configparser
 import requests
 from typing import Optional
+import concurrent.futures
 
 import musicbrainzngs
 from mutagen._util import MutagenError
@@ -500,38 +501,65 @@ class MetadataFetcherThread(QThread):
     def run(self):
         """Main thread execution method."""
         metadata_options = []
+        search_tasks = []
 
-        # MusicBrainz search
-        self.progress_signal.emit("Searching MusicBrainz...")
-        musicbrainz_results = fetch_song_metadata(self.artist, self.title)
+        # Define search functions to be run in parallel
+        def search_from_musicbrainz():
+            self.progress_signal.emit("Searching MusicBrainz...")
+            results = fetch_song_metadata(self.artist, self.title)
+            # Enhance with cover art (this part can remain sequential for MusicBrainz results)
+            for result in results:
+                if "release_id" in result:
+                    cover_url = self.public_apis.search_musicbrainz_cover_art(
+                        result["release_id"]
+                    )
+                    if cover_url:
+                        result["cover_url"] = cover_url
+                        result["source"] = "MusicBrainz (with cover)"
+            self.progress_signal.emit("MusicBrainz search complete.")
+            return results
 
-        # Enhance with cover art
-        for result in musicbrainz_results:
-            if "release_id" in result:
-                cover_url = self.public_apis.search_musicbrainz_cover_art(
-                    result["release_id"]
-                )
-                if cover_url:
-                    result["cover_url"] = cover_url
-                    result["source"] = "MusicBrainz (with cover)"
+        def search_from_audiodb():
+            self.progress_signal.emit("Searching TheAudioDB...")
+            results = self.public_apis.search_audiodb(self.artist, self.title)
+            self.progress_signal.emit("TheAudioDB search complete.")
+            return results
 
-        metadata_options.extend(musicbrainz_results)
+        def search_from_deezer():
+            self.progress_signal.emit("Searching Deezer...")
+            results = self.public_apis.search_deezer(self.artist, self.title)
+            self.progress_signal.emit("Deezer search complete.")
+            return results
 
-        # Public APIs
-        self.progress_signal.emit("Searching TheAudioDB...")
-        metadata_options.extend(
-            self.public_apis.search_audiodb(self.artist, self.title)
-        )
+        # Add tasks to a list
+        search_tasks.append(search_from_musicbrainz)
+        search_tasks.append(search_from_audiodb)
+        search_tasks.append(search_from_deezer)
 
-        self.progress_signal.emit("Searching Deezer...")
-        metadata_options.extend(self.public_apis.search_deezer(self.artist, self.title))
+        self.progress_signal.emit("Searching all metadata sources in parallel...")
 
-        # Lyrics.ovh as fallback
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=3
+        ) as executor:  # Max 3 workers for 3 main APIs
+            futures = [executor.submit(task) for task in search_tasks]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    results = future.result()
+                    metadata_options.extend(results)
+                except Exception as exc:
+                    print(
+                        f"A search generated an exception: {exc}"
+                    )  # Log the exception
+
+        # Lyrics.ovh as fallback, only if no results from other sources
         if not metadata_options:
-            self.progress_signal.emit("Searching Lyrics.ovh...")
+            self.progress_signal.emit(
+                "No results found, searching Lyrics.ovh as fallback..."
+            )
             metadata_options.extend(
                 self.public_apis.search_lrcat(self.artist, self.title)
             )
+            self.progress_signal.emit("Lyrics.ovh search complete.")
 
         self.finished.emit(metadata_options)
 
