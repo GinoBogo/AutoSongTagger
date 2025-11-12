@@ -1291,35 +1291,42 @@ class AutoSongTaggerUI(QWidget):
         if selected_indexes:
             self.apply_button.setEnabled(True)
             selected_row = selected_indexes[0].row()
+            self._populate_fields_from_selection(selected_row)
+        else:
+            self.apply_button.setEnabled(False)
+            self._clear_input_fields()
 
-            # Get data from selected row
-            field_data = {}
-            fields = ["source", "artist", "title", "album", "year", "track", "genre"]
+        # Update button state
+        self._on_current_tag_text_changed()
 
-            for col, field in enumerate(fields):
-                item = self.results_list.item(selected_row, col)
-                field_data[field] = item.text() if item else ""
+    def _populate_fields_from_selection(self, selected_row: int):
+        """Populate input fields and download cover art based on selected row."""
+        field_data = {}
+        fields = ["source", "artist", "title", "album", "year", "track", "genre"]
 
-            # Populate current tag display fields
-            for field in ["artist", "title", "album", "year", "track", "genre"]:
-                getattr(self, f"current_{field}_input").setText(
-                    field_data.get(field, "")
-                )
+        for col, field in enumerate(fields):
+            item = self.results_list.item(selected_row, col)
+            field_data[field] = item.text() if item else ""
 
-            # If this result has cover art, download and display it
-            if selected_row < len(self.metadata_options):
-                metadata = self.metadata_options[selected_row]
-                cover_url = metadata.get("cover_url")
-                if cover_url:
-                    self._download_and_display_cover(cover_url)
+        for field in ["artist", "title", "album", "year", "track", "genre"]:
+            getattr(self, f"current_{field}_input").setText(
+                field_data.get(field, "")
+            )
+
+        if selected_row < len(self.metadata_options):
+            metadata = self.metadata_options[selected_row]
+            cover_url = metadata.get("cover_url")
+            if cover_url:
+                self._download_and_display_cover(cover_url)
 
             # Update button state
             self._on_current_tag_text_changed()
         else:
             self.apply_button.setEnabled(False)
-            # Clear current tag display fields
-            for field in ["artist", "title", "album", "year", "track", "genre"]:
-                getattr(self, f"current_{field}_input").clear()
+    def _clear_input_fields(self):
+        """Clear current tag display fields."""
+        for field in ["artist", "title", "album", "year", "track", "genre"]:
+            getattr(self, f"current_{field}_input").clear()
             # Update button state
             self._on_current_tag_text_changed()
 
