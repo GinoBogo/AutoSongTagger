@@ -96,6 +96,22 @@ class TagWriterThread(QThread):
             self.finished.emit(False, f"Failed to apply tags: {e}")
 
 
+class MetadataFetcherThread(QThread):
+    """QThread for fetching metadata in a separate thread."""
+
+    finished = Signal(list)  # Signal(metadata_options)
+
+    def __init__(self, artist: str, title: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.artist = artist
+        self.title = title
+
+    def run(self):
+        """Main thread execution method."""
+        metadata_options = fetch_song_metadata(self.artist, self.title)
+        self.finished.emit(metadata_options)
+
+
 # =============================================================================
 # CUSTOM WIDGETS
 # =============================================================================
@@ -431,6 +447,7 @@ class AutoSongTaggerUI(QWidget):
         self.song_file_path = ""
         self.metadata_options = []
         self.tag_writer_thread = None
+        self.metadata_fetcher_thread = None
 
         # Declare UI elements for static analysis
         self.current_artist_input: QLineEdit
@@ -1014,13 +1031,27 @@ class AutoSongTaggerUI(QWidget):
         self.results_list.setRowCount(0)  # Clear existing rows
         self.apply_button.setEnabled(False)
 
-        self.metadata_options = fetch_song_metadata(artist, title)
+        # Show progress bar
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        self.progress_bar.setFormat("Fetching metadata...")
+        self.progress_bar.show()
 
-        if not self.metadata_options:
+        # Create and start the metadata fetcher thread
+        self.metadata_fetcher_thread = MetadataFetcherThread(artist, title)
+        self.metadata_fetcher_thread.finished.connect(self._on_metadata_fetched)
+        self.metadata_fetcher_thread.start()
+
+    def _on_metadata_fetched(self, metadata_options: list[dict]):
+        """Handle the result of metadata fetching thread."""
+        self.progress_bar.hide()
+
+        if not metadata_options:
             QMessageBox.information(
                 self, "No Results", "No metadata found for this artist and title."
             )
             return
+
+        self.metadata_options = metadata_options
 
         # Sort by year ascending
         self.metadata_options.sort(
