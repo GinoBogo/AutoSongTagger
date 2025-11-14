@@ -5,7 +5,7 @@
 
 *.cfg
 *.zip
-requirements_dev-only.txt
+dev-requirements.txt
 
 github-markdown.css
 

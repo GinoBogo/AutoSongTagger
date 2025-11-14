@@ -16,22 +16,22 @@ Features:
 """
 
 import base64
+import configparser
 import os
 import sys
-import configparser
-import requests
-from typing import Optional
 import concurrent.futures
+from typing import Optional
 
 import musicbrainzngs
+import requests
 from mutagen._util import MutagenError
 from mutagen.flac import Picture
 from mutagen.id3 import ID3
-from mutagen.id3._frames import TALB, TDRC, TPE1, TIT2, TCON, APIC, TRCK
+from mutagen.id3._frames import APIC, TALB, TCON, TDRC, TIT2, TPE1, TRCK
 from mutagen.mp3 import MP3
 from mutagen.oggopus import OggOpus
 
-from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QCloseEvent, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -42,8 +42,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPushButton,
     QProgressBar,
+    QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -59,7 +59,7 @@ NO_FILE_SELECTED_TEXT = "No file selected."
 CONFIG_FILE_NAME = "auto_song_tagger.cfg"
 
 # MusicBrainz client setup
-musicbrainzngs.set_useragent("AutoSongTagger", "0.1", "your-email@example.com")
+musicbrainzngs.set_useragent("AutoSongTagger", "0.1", "fosscode@gmail.com")
 
 
 # =============================================================================
@@ -199,14 +199,24 @@ def fetch_song_metadata(artist: str, title: str) -> list[dict]:
         print(f"Error fetching metadata from MusicBrainz: {exc}")
         return []
 
-    if not result.get("recording-list"):
+    recording_list = result.get("recording-list")
+    if not recording_list:
         return []
 
     release_cache = {}
-    return [
-        _process_recording(rec, artist, release_cache)
-        for rec in result["recording-list"]
-    ]
+    processed_results = []
+    # Parallelize processing of recordings to speed up release data fetching.
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = {
+            executor.submit(_process_recording, rec, artist, release_cache)
+            for rec in recording_list
+        }
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                processed_results.append(future.result())
+            except Exception as exc:
+                print(f"Error processing a recording from MusicBrainz: {exc}")
+    return processed_results
 
 
 # =============================================================================
@@ -507,15 +517,23 @@ class MetadataFetcherThread(QThread):
         def search_from_musicbrainz():
             self.progress_signal.emit("Searching MusicBrainz...")
             results = fetch_song_metadata(self.artist, self.title)
-            # Enhance with cover art (this part can remain sequential for MusicBrainz results)
-            for result in results:
-                if "release_id" in result:
+            self.progress_signal.emit("Fetching MusicBrainz cover art...")
+
+            def fetch_cover(result):
+                """Fetches cover art for a single result dictionary."""
+                if result and result.get("release_id"):
                     cover_url = self.public_apis.search_musicbrainz_cover_art(
                         result["release_id"]
                     )
                     if cover_url:
                         result["cover_url"] = cover_url
                         result["source"] = "MusicBrainz (with cover)"
+                return result
+
+            # Parallelize cover art fetching to speed up the process.
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                results = list(executor.map(fetch_cover, results))
+
             self.progress_signal.emit("MusicBrainz search complete.")
             return results
 
@@ -538,6 +556,7 @@ class MetadataFetcherThread(QThread):
 
         self.progress_signal.emit("Searching all metadata sources in parallel...")
 
+        # Run searches for all music APIs in parallel.
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=3
         ) as executor:  # Max 3 workers for 3 main APIs
